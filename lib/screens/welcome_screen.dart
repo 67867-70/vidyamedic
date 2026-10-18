@@ -1,12 +1,205 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/app_state.dart';
+import '../services/api_config.dart';
 import '../theme/app_theme.dart';
 import '../widgets/custom_widgets.dart';
 import 'onboarding/onboarding_screen.dart';
 import 'home/home_screen.dart';
 
-/// Mockup halaman 2, layar 1 – cover / registrasi awal.
+/// Halaman Cover & Autentikasi Awal VidyaMedic
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
+
+  void _showServerConfigDialog(BuildContext context) {
+    final ctrl = TextEditingController(text: ApiConfig.baseUrl);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Konfigurasi URL Server', style: AppTheme.font(size: 17, weight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Gunakan URL backend (contoh: http://10.0.2.2:3030 untuk emulator atau http://localhost:3030)',
+              style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              decoration: const InputDecoration(
+                hintText: 'http://localhost:3030',
+                prefixIcon: Icon(Icons.link_rounded),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await ApiConfig.resetBaseUrl();
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Reset Default'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newUrl = ctrl.text.trim();
+              if (newUrl.isNotEmpty) {
+                await ApiConfig.setBaseUrl(newUrl);
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSignInSheet(BuildContext context) {
+    final emailCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    bool isSubmitting = false;
+    String? localError;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setMState) => Padding(
+          padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4.5,
+                    decoration: BoxDecoration(
+                      color: AppTheme.borderLight,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Masuk ke VidyaMedic',
+                        style: AppTheme.font(size: 18, weight: FontWeight.w800, color: AppTheme.primaryDark)),
+                    IconButton.filledTonal(
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppTheme.fieldFill,
+                        padding: const EdgeInsets.all(6),
+                      ),
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text('Masuk dengan akun pasien yang telah terdaftar',
+                    style: AppTheme.font(size: 13, color: AppTheme.textSecondary)),
+                const SizedBox(height: 18),
+                if (localError != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 14),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFDECEC),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.statusRed.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error_outline, size: 20, color: AppTheme.statusRed),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(localError!,
+                              style: AppTheme.font(size: 12.5, color: AppTheme.statusRed, weight: FontWeight.w500)),
+                        ),
+                      ],
+                    ),
+                  ),
+                const FieldLabel('Email'),
+                TextField(
+                  controller: emailCtrl,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    hintText: 'nama@example.com',
+                    prefixIcon: Icon(Icons.email_outlined, size: 20),
+                  ),
+                ),
+                const FieldLabel('Password'),
+                TextField(
+                  controller: passCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    hintText: '••••••••',
+                    prefixIcon: Icon(Icons.lock_outline, size: 20),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            final email = emailCtrl.text.trim();
+                            final pass = passCtrl.text;
+                            if (email.isEmpty || pass.isEmpty) {
+                              setMState(() => localError = 'Harap isi email dan password.');
+                              return;
+                            }
+                            setMState(() {
+                              isSubmitting = true;
+                              localError = null;
+                            });
+
+                            final appState = context.read<AppState>();
+                            final success = await appState.signin(email: email, password: pass);
+
+                            if (!ctx.mounted) return;
+                            if (success) {
+                              Navigator.pop(ctx);
+                              Navigator.pushReplacement(
+                                context,
+                                MaterialPageRoute(builder: (_) => const HomeScreen()),
+                              );
+                            } else {
+                              setMState(() {
+                                isSubmitting = false;
+                                localError = appState.authError ?? 'Gagal masuk akun. Periksa email & password.';
+                              });
+                            }
+                          },
+                    child: isSubmitting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Text('Masuk'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +222,17 @@ class WelcomeScreen extends StatelessWidget {
                         children: [
                           Column(
                             children: [
-                              const SizedBox(height: 12),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.settings_outlined, color: AppTheme.textSecondary, size: 22),
+                                    tooltip: 'Pengaturan Server',
+                                    onPressed: () => _showServerConfigDialog(context),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
                               const _Logo(),
                               const SizedBox(height: 10),
                               Text(
@@ -62,15 +265,12 @@ class WelcomeScreen extends StatelessWidget {
                                   context,
                                   MaterialPageRoute(builder: (_) => const OnboardingScreen()),
                                 ),
-                                child: const Text('Daftar Akun'),
+                                child: const Text('Daftar Akun Baru'),
                               ),
                               const SizedBox(height: 10),
                               TonalButton(
-                                label: 'Masuk',
-                                onPressed: () => Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(builder: (_) => const HomeScreen()),
-                                ),
+                                label: 'Masuk Akun',
+                                onPressed: () => _showSignInSheet(context),
                               ),
                               const SizedBox(height: 22),
                               const Row(
@@ -159,107 +359,50 @@ class _WelcomeHeroCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF064E3B), Color(0xFF0B7A5A)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.borderLight),
         boxShadow: AppTheme.shadowCard,
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  gradient: AppTheme.primaryGradient,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.insights_rounded, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 12),
               Expanded(
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 38,
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.2),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.directions_run_rounded, color: Colors.white, size: 22),
+                    Text(
+                      'CAPAR Personal Baseline',
+                      style: AppTheme.font(size: 14, weight: FontWeight.w700, color: AppTheme.textPrimary),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Integrasi Smartwatch',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppTheme.font(size: 13.5, weight: FontWeight.w700, color: Colors.white),
-                          ),
-                          Text(
-                            'Real-time Continuous Sync',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppTheme.font(size: 11, color: Colors.white70),
-                          ),
-                        ],
-                      ),
+                    Text(
+                      'Analisis fisiologis terpersonalisasi',
+                      style: AppTheme.font(size: 11.5, color: AppTheme.textSecondary),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppTheme.accentMint.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text('Aktif',
-                    style: AppTheme.font(size: 10.5, weight: FontWeight.w800, color: AppTheme.accentMint)),
-              ),
             ],
           ),
           const SizedBox(height: 14),
-
-          // Mini metrics
-          Row(
-            children: [
-              Expanded(
-                child: _heroMetric(Icons.favorite, '72 bpm', 'Detak Jantung', AppTheme.faceRed),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _heroMetric(Icons.bedtime, '7.5 jam', 'Kualitas Tidur', const Color(0xFF818CF8)),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _heroMetric(Icons.directions_walk, '6.240', 'Langkah Hari Ini', AppTheme.accentMint),
-              ),
-            ],
+          Text(
+            'Membantu Anda memahami baseline ritme jantung, deviasi kontekstual, pemulihan, dan panduan tindakan yang aman.',
+            style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary, height: 1.4),
           ),
-          const SizedBox(height: 12),
-          const PulseLine(color: AppTheme.accentMint),
-        ],
-      ),
-    );
-  }
-
-  Widget _heroMetric(IconData icon, String val, String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, size: 16, color: color),
-          const SizedBox(height: 4),
-          Text(val, style: AppTheme.font(size: 13, weight: FontWeight.w800, color: Colors.white)),
-          Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: AppTheme.font(size: 9, color: Colors.white70)),
         ],
       ),
     );

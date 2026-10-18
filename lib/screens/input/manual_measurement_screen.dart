@@ -42,11 +42,26 @@ class ManualMeasurementScreen extends StatelessWidget {
         ],
       ),
       bottom: ElevatedButton(
-        onPressed: () {
-          showSaved(context, 'Data pengukuran manual berhasil disimpan');
+        onPressed: s.isSubmittingDaily ? null : () async {
+          s.confirmDailySection('measurements');
+          final saved = await s.submitDaily();
+          if (!context.mounted) return;
+          if (!saved) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(s.dataError ?? 'Pengukuran gagal disimpan ke server.')),
+            );
+            return;
+          }
+          showSaved(context, 'Pengukuran tersimpan di server');
           Navigator.pop(context);
         },
-        child: const Text('Simpan'),
+        child: s.isSubmittingDaily
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Simpan'),
       ),
     );
   }

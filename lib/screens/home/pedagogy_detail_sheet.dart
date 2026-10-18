@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/health_models.dart';
 import '../../theme/app_theme.dart';
 
-/// Modal bottom sheet showing algorithm details and patient meaning for
-/// one of the 6 pedagogical questions (Mockup Halaman 7).
+/// Modal lembar bawah yang menjelaskan cara analisis dan makna bagi pasien
 class PedagogyDetailSheet extends StatelessWidget {
   final PedagogyAnswer answer;
 
@@ -48,14 +47,14 @@ class PedagogyDetailSheet extends StatelessWidget {
                 Expanded(
                   child: Text(
                     answer.question,
-                    style: AppTheme.font(size: 16, weight: FontWeight.w700),
+                    style: AppTheme.font(size: 15.5, weight: FontWeight.w700),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 14),
 
-            // Algorithm Card
+            // Card Penjelasan Cara Analisis
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -72,8 +71,8 @@ class PedagogyDetailSheet extends StatelessWidget {
                       const Icon(Icons.psychology_alt_outlined, size: 16, color: AppTheme.primary),
                       const SizedBox(width: 6),
                       Text(
-                        'Algoritma di Belakangnya (Halaman 7)',
-                        style: AppTheme.font(size: 11, weight: FontWeight.w700, color: AppTheme.primaryDark),
+                        'Bagaimana VidyaMedic Memantau?',
+                        style: AppTheme.font(size: 11.5, weight: FontWeight.w700, color: AppTheme.primaryDark),
                       ),
                     ],
                   ),
@@ -87,7 +86,7 @@ class PedagogyDetailSheet extends StatelessWidget {
             ),
             const SizedBox(height: 14),
 
-            Text('Makna bagi Pasien', style: AppTheme.font(size: 13, weight: FontWeight.w700)),
+            Text('Ringkasan Kondisi Anda', style: AppTheme.font(size: 13, weight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text(
               answer.summary,
@@ -95,20 +94,20 @@ class PedagogyDetailSheet extends StatelessWidget {
             ),
             const SizedBox(height: 12),
 
-            Text('Bukti Digital & Interpretasi', style: AppTheme.font(size: 13, weight: FontWeight.w700)),
+            Text('Penjelasan Lebih Lanjut', style: AppTheme.font(size: 13, weight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text(
               answer.detail,
               style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary, height: 1.4),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
 
             SizedBox(
               width: double.infinity,
-              height: 46,
+              height: 44,
               child: ElevatedButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Tutup'),
+                child: const Text('Mengerti'),
               ),
             ),
           ],

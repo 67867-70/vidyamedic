@@ -14,8 +14,8 @@ class ActivityInputScreen extends StatefulWidget {
 
 class _ActivityInputScreenState extends State<ActivityInputScreen> {
   late String _activity;
-  late StressLevel _stress;
-  late bool _makan;
+  StressLevel? _stress;
+  late TextEditingController _mealCountController;
   late bool _kafein;
   late bool _alkohol;
   late bool _merokok;
@@ -27,30 +27,55 @@ class _ActivityInputScreenState extends State<ActivityInputScreen> {
     final s = context.read<AppState>();
     _activity = s.activity;
     _stress = s.stress;
-    _makan = s.habitMeal;
+    _mealCountController =
+        TextEditingController(text: s.mealCount?.toString() ?? '');
     _kafein = s.habitCaffeine;
     _alkohol = s.habitAlcohol;
     _merokok = s.habitSmoking;
     _minumObat = s.habitMedication;
   }
 
-  void _save() {
+  @override
+  void dispose() {
+    _mealCountController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
     final s = context.read<AppState>();
+    final mealCount = int.tryParse(_mealCountController.text.trim());
+    if (mealCount == null || mealCount < 0 || mealCount > 20) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Masukkan jumlah makan 0 sampai 20 kali.')),
+      );
+      return;
+    }
     s.update(() {
       s.activity = _activity;
       s.stress = _stress;
-      s.habitMeal = _makan;
+      s.mealCount = mealCount;
+      s.habitMeal = mealCount > 0;
       s.habitCaffeine = _kafein;
       s.habitAlcohol = _alkohol;
       s.habitSmoking = _merokok;
       s.habitMedication = _minumObat;
+      s.confirmDailySection('activity');
     });
-    showSaved(context, 'Aktivitas & gaya hidup berhasil disimpan');
+    final saved = await s.submitDaily();
+    if (!mounted) return;
+    if (!saved) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.dataError ?? 'Konteks aktivitas gagal disimpan ke server.')),
+      );
+      return;
+    }
+    showSaved(context, 'Aktivitas dan konteks tersimpan di server');
     Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
+    final isSaving = context.watch<AppState>().isSubmittingDaily;
     return MockupScaffold(
       title: 'Aktivitas & Gaya Hidup',
       body: Column(
@@ -78,7 +103,7 @@ class _ActivityInputScreenState extends State<ActivityInputScreen> {
             },
           ),
 
-          const SectionTitle('Tingkat stres saat ini'),
+          const SectionTitle('Tingkat stres saat ini (opsional)'),
           Row(
             children: StressLevel.values
                 .map((lvl) => Expanded(
@@ -97,12 +122,17 @@ class _ActivityInputScreenState extends State<ActivityInputScreen> {
           ),
 
           const SectionTitle('Apakah Anda baru saja?'),
-          ToggleRow(
-            icon: Icons.restaurant,
-            label: 'Makan',
-            value: _makan,
-            onChanged: (v) => setState(() => _makan = v),
+          const Text('Berapa kali Anda makan hari ini?'),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _mealCountController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              hintText: 'Contoh: 3',
+              suffixText: 'kali',
+            ),
           ),
+          const SizedBox(height: 8),
           ToggleRow(
             icon: Icons.coffee,
             label: 'Minum kafein (kopi/teh)',
@@ -131,8 +161,14 @@ class _ActivityInputScreenState extends State<ActivityInputScreen> {
         ],
       ),
       bottom: ElevatedButton(
-        onPressed: _save,
-        child: const Text('Simpan'),
+        onPressed: isSaving ? null : _save,
+        child: isSaving
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Simpan'),
       ),
     );
   }

@@ -98,7 +98,7 @@ class StepProgress extends StatelessWidget {
               tween: Tween(end: step / total),
               duration: const Duration(milliseconds: 350),
               curve: Curves.easeOutCubic,
-              builder: (_, v, _) => LinearProgressIndicator(
+              builder: (_, v, child) => LinearProgressIndicator(
                 value: v,
                 minHeight: 6,
                 backgroundColor: const Color(0xFFE6ECEA),
@@ -345,7 +345,7 @@ class MockupScaffold extends StatelessWidget {
                     if (subtitle != null) ...[const SizedBox(height: 2), subtitle!],
                   ],
                 ),
-                actions: [?trailing, const SizedBox(width: 8)],
+                actions: [if (trailing != null) trailing!, const SizedBox(width: 8)],
               ),
               body: SafeArea(
                 top: false,

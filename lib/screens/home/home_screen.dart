@@ -20,6 +20,12 @@ import '../input/event_marker_screen.dart';
 import '../input/free_note_screen.dart';
 import '../summary/daily_summary_screen.dart';
 import '../profile/profile_screen.dart';
+import '../chatbot/ai_chat_screen.dart';
+import '../actions/action_tracking_screen.dart';
+import '../impact/impact_dashboard_screen.dart';
+import '../experiment/experiment_flow_screen.dart';
+import '../questionnaire/sus_questionnaire_screen.dart';
+import '../questionnaire/nasa_tlx_questionnaire_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -30,12 +36,328 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  AppState? _observedAppState;
+  bool _movementDialogVisible = false;
+  bool _deviationDialogVisible = false;
+  String? _queuedDeviationSegmentId;
+  bool _noDataDialogVisible = false;
+  bool _noDataDialogHandled = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final appState = context.read<AppState>();
+    if (!identical(_observedAppState, appState)) {
+      _observedAppState?.removeListener(_onAppStateChanged);
+      _observedAppState = appState..addListener(_onAppStateChanged);
+    }
+    _queueNoDataPrompt();
+    _queueMovementPrompt();
+    _queueDeviationPrompt();
+  }
+
+  @override
+  void dispose() {
+    _observedAppState?.removeListener(_onAppStateChanged);
+    super.dispose();
+  }
+
+  void _onAppStateChanged() {
+    _queueNoDataPrompt();
+    _queueMovementPrompt();
+    _queueDeviationPrompt();
+  }
+
+  void _queueDeviationPrompt() {
+    final appState = _observedAppState;
+    final prompt = appState?.followUpPrompt;
+    final segmentId = prompt?.segmentId;
+    if (!mounted ||
+        _currentIndex != 0 ||
+        appState == null ||
+        prompt?.status != 'requested' ||
+        segmentId == null ||
+        _deviationDialogVisible ||
+        _queuedDeviationSegmentId == segmentId ||
+        !appState.markFollowUpPromptShown(segmentId)) {
+      return;
+    }
+    _queuedDeviationSegmentId = segmentId;
+    _deviationDialogVisible = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _currentIndex != 0) {
+        _deviationDialogVisible = false;
+        return;
+      }
+      final followUp = appState.followUpPrompt;
+      final action = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Pola pribadi menyimpang'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 420),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    followUp.message ??
+                        'CAPAR menemukan perubahan terhadap baseline pribadi. Mohon isi konteks agar sistem dapat membandingkan kondisi pada awal deviasi hingga puncaknya.',
+                  ),
+                  const SizedBox(height: 12),
+                  if (followUp.onsetTime != null)
+                    Text('Onset: ${_formatDateTime(followUp.onsetTime!)}'),
+                  if (followUp.peakTime != null)
+                    Text('Puncak: ${_formatDateTime(followUp.peakTime!)}'),
+                  if (followUp.deviationDistance != null)
+                    Text(
+                      'Jarak dari baseline: ${followUp.deviationDistance!.toStringAsFixed(2)}',
+                    ),
+                  if (followUp.mainFactors.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Kontributor fitur terbesar: ${_factorLabel(followUp.mainFactors.first)}',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                  if (followUp.referenceThresholds != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Ambang referensi CAPAR: ${followUp.referenceThresholds}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Angka ini adalah pembanding statistik terhadap baseline Anda, bukan ambang klinis atau diagnosis. Konteks yang Anda isi adalah laporan pribadi, bukan bukti penyebab.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Isi konteks deviasi'),
+            ),
+          ],
+        ),
+      );
+      _deviationDialogVisible = false;
+      if (!mounted || action != true) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const WhatChangedScreen()),
+      );
+    });
+  }
+
+  String _formatDateTime(DateTime value) =>
+      '${MaterialLocalizations.of(context).formatFullDate(value.toLocal())} ${MaterialLocalizations.of(context).formatTimeOfDay(
+        TimeOfDay.fromDateTime(value.toLocal()),
+      )}';
+
+  String _factorLabel(Map<String, dynamic> factor) {
+    final label =
+        factor['label'] ?? factor['feature'] ?? factor['key'] ?? 'Fitur';
+    final contribution =
+        factor['contribution_pct'] ?? factor['contribution'] ?? factor['share'];
+    return contribution == null ? '$label' : '$label ($contribution)';
+  }
+
+  void _queueNoDataPrompt() {
+    final appState = _observedAppState;
+    if (!mounted ||
+        _currentIndex != 0 ||
+        appState == null ||
+        appState.isRefreshing ||
+        appState.dataError != null ||
+        appState.wearable.hasServerSamples ||
+        appState.hasCaparMetrics ||
+        _noDataDialogVisible ||
+        _noDataDialogHandled) {
+      return;
+    }
+    _noDataDialogVisible = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _currentIndex != 0) {
+        _noDataDialogVisible = false;
+        return;
+      }
+      _noDataDialogHandled = true;
+      final choice = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Data kesehatan belum tersedia'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Data wearable/CAPAR belum cukup untuk menilai kondisi personal atau tingkat stres Anda. Ini bukan berarti kondisi Anda normal. Anda tetap dapat mencatat kondisi dan menggunakan aplikasi.',
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Pertanyaan keselamatan ini adalah panduan umum NON-KLINIS / PLACEHOLDER, bukan diagnosis. Jangan menunggu aplikasi jika Anda merasa membutuhkan pertolongan segera.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF78350F)),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFCA5A5)),
+                ),
+                child: const Text(
+                  'Apakah saat ini Anda mengalami nyeri dada berat, sesak napas berat, pingsan, atau kondisi yang memburuk dengan cepat?',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'continue'),
+              child: const Text('Lanjutkan penggunaan'),
+            ),
+            OutlinedButton(
+              onPressed: () => Navigator.pop(dialogContext, 'check_in'),
+              child: const Text('Catat gejala/kondisi'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.statusRed,
+              ),
+              onPressed: () => Navigator.pop(dialogContext, 'emergency'),
+              child: const Text('Ya, ada tanda bahaya'),
+            ),
+          ],
+        ),
+      );
+      _noDataDialogVisible = false;
+      if (!mounted) return;
+      if (choice == 'check_in') {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const GuidedDailyFlowScreen(initialStep: 6),
+          ),
+        );
+      } else if (choice == 'emergency') {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Segera cari pertolongan'),
+            content: const Text(
+              'Jangan menunggu data wearable atau hasil analisis aplikasi. Hubungi layanan darurat setempat atau minta orang terdekat mengantar Anda ke IGD sekarang.',
+            ),
+            actions: [
+              ElevatedButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Mengerti'),
+              ),
+            ],
+          ),
+        );
+      }
+    });
+  }
+
+  void _queueMovementPrompt() {
+    final appState = _observedAppState;
+    if (!mounted ||
+        _currentIndex != 0 ||
+        appState == null ||
+        appState.followUpPrompt.status == 'requested' ||
+        !appState.showActivityMovementPrompt ||
+        _movementDialogVisible) {
+      return;
+    }
+    _movementDialogVisible = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || _currentIndex != 0) {
+        _movementDialogVisible = false;
+        return;
+      }
+      final selectedActivity = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Terdeteksi perubahan gerak'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Pola akselerometer menyerupai ${appState.suggestedActivity.toLowerCase()}. Apakah Anda sedang ${appState.suggestedActivity.toLowerCase()}? Ini perkiraan sensor; konfirmasi Anda yang menentukan.',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Aturan non-klinis: resultan √(x²+y²+z²), lalu delta terhadap rerata lokal; sumbu tidak dinormalisasi. Minimal ${ActivityMotionPolicy.demo.minimumSampleSeconds.toStringAsFixed(0)} detik, cadence ${ActivityMotionPolicy.demo.minimumCadenceHz.toStringAsFixed(1)}–${ActivityMotionPolicy.demo.maximumCadenceHz.toStringAsFixed(1)} Hz, berlari mulai ${ActivityMotionPolicy.demo.runningCadenceHz.toStringAsFixed(1)} Hz, prominence ≥${ActivityMotionPolicy.demo.minimumPeakProminenceG.toStringAsFixed(2)} g, variasi interval ≤${(ActivityMotionPolicy.demo.maximumIntervalVariation * 100).round()}%.',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              ),
+              if (appState.movementAnalysis != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Terukur: ${appState.movementAnalysis!.cadenceHz.toStringAsFixed(2)} Hz; ${appState.movementAnalysis!.peakCount} puncak; RMS delta resultan ${appState.movementAnalysis!.rmsDeltaMagnitudeG.toStringAsFixed(3)} g.',
+                  style:
+                      const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                ),
+              ],
+              const SizedBox(height: 10),
+              ...kActivities
+                  .where((item) => item.$1 != 'Duduk' && item.$1 != 'Istirahat')
+                  .map(
+                    (item) => ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(item.$2, color: AppTheme.primary),
+                      title: Text(item.$1),
+                      onTap: () => Navigator.pop(dialogContext, item.$1),
+                    ),
+                  ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, '__keep_activity__'),
+              child: Text('Saya tetap ${appState.activity.toLowerCase()}'),
+            ),
+          ],
+        ),
+      );
+      _movementDialogVisible = false;
+      if (!mounted) return;
+      if (selectedActivity == null || selectedActivity == '__keep_activity__') {
+        appState.dismissActivityMovementPrompt();
+        return;
+      }
+      final saved = await appState.confirmActivityTransition(selectedActivity);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(saved
+              ? 'Aktivitas $selectedActivity dikonfirmasi dan tersimpan.'
+              : appState.dataError ?? 'Aktivitas gagal disimpan.'),
+        ),
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final pages = [
-      _PedagogyDashboard(onNavigateToInput: () => setState(() => _currentIndex = 1)),
+      _PedagogyDashboard(
+        onNavigateToInput: () => setState(() => _currentIndex = 1),
+        onNavigateToChat: () => setState(() => _currentIndex = 2),
+      ),
       const _InputFlowTab(),
+      const AiChatScreen(),
       const DailySummaryScreen(),
       const ProfileScreen(),
     ];
@@ -52,7 +374,8 @@ class _HomeScreenState extends State<HomeScreen> {
               bottomNavigationBar: Container(
                 decoration: const BoxDecoration(
                   color: Colors.white,
-                  border: Border(top: BorderSide(color: AppTheme.borderLight, width: 1)),
+                  border: Border(
+                      top: BorderSide(color: AppTheme.borderLight, width: 1)),
                   boxShadow: [
                     BoxShadow(
                       color: Color(0x0A0B7A5A),
@@ -64,31 +387,46 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: SafeArea(
                   child: NavigationBar(
                     selectedIndex: _currentIndex,
-                    onDestinationSelected: (idx) => setState(() => _currentIndex = idx),
+                    onDestinationSelected: (idx) {
+                      setState(() => _currentIndex = idx);
+                      _queueMovementPrompt();
+                      if (idx == 0) _queueDeviationPrompt();
+                    },
                     backgroundColor: Colors.white,
                     indicatorColor: AppTheme.primarySoft,
                     elevation: 0,
                     height: 65,
-                    labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+                    labelBehavior:
+                        NavigationDestinationLabelBehavior.alwaysShow,
                     destinations: const [
                       NavigationDestination(
                         icon: Icon(Icons.favorite_border_rounded, size: 22),
-                        selectedIcon: Icon(Icons.favorite_rounded, color: AppTheme.primary, size: 23),
-                        label: 'Home',
+                        selectedIcon: Icon(Icons.favorite_rounded,
+                            color: AppTheme.primary, size: 23),
+                        label: 'Beranda',
                       ),
                       NavigationDestination(
                         icon: Icon(Icons.edit_note_outlined, size: 24),
-                        selectedIcon: Icon(Icons.edit_note_rounded, color: AppTheme.primary, size: 25),
-                        label: 'Input',
+                        selectedIcon: Icon(Icons.edit_note_rounded,
+                            color: AppTheme.primary, size: 25),
+                        label: 'Catat Harian',
+                      ),
+                      NavigationDestination(
+                        icon: Icon(Icons.smart_toy_outlined, size: 22),
+                        selectedIcon: Icon(Icons.smart_toy_rounded,
+                            color: AppTheme.primary, size: 23),
+                        label: 'Chat AI',
                       ),
                       NavigationDestination(
                         icon: Icon(Icons.assessment_outlined, size: 22),
-                        selectedIcon: Icon(Icons.assessment_rounded, color: AppTheme.primary, size: 23),
+                        selectedIcon: Icon(Icons.assessment_rounded,
+                            color: AppTheme.primary, size: 23),
                         label: 'Ringkasan',
                       ),
                       NavigationDestination(
                         icon: Icon(Icons.person_outline_rounded, size: 22),
-                        selectedIcon: Icon(Icons.person_rounded, color: AppTheme.primary, size: 23),
+                        selectedIcon: Icon(Icons.person_rounded,
+                            color: AppTheme.primary, size: 23),
                         label: 'Profil',
                       ),
                     ],
@@ -104,17 +442,22 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 // ---------------------------------------------------------------------------
-// Tab 0: Dashboard Utama (Pedagogi Kesehatan, Sensor Realtime, CAPAR)
+// Tab 0: Dashboard Utama (Pemantauan Personal Ramah Pasien)
 // ---------------------------------------------------------------------------
 class _PedagogyDashboard extends StatelessWidget {
   final VoidCallback onNavigateToInput;
-  const _PedagogyDashboard({required this.onNavigateToInput});
+  final VoidCallback onNavigateToChat;
+  const _PedagogyDashboard({
+    required this.onNavigateToInput,
+    required this.onNavigateToChat,
+  });
 
   @override
   Widget build(BuildContext context) {
     final s = context.watch<AppState>();
-    final triage = s.triageLevel;
     final w = s.wearable;
+    final caparStatus =
+        (s.rawCaparInsights?['capar'] as Map<String, dynamic>?)?['status'];
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -131,17 +474,25 @@ class _PedagogyDashboard extends StatelessWidget {
               children: [
                 Text(
                   'VidyaMedic',
-                  style: AppTheme.font(size: 18.5, weight: FontWeight.w800, color: AppTheme.primaryDark, letterSpacing: -0.3),
+                  style: AppTheme.font(
+                      size: 18.5,
+                      weight: FontWeight.w800,
+                      color: AppTheme.primaryDark,
+                      letterSpacing: -0.3),
                 ),
                 const SizedBox(width: 6),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: AppTheme.primarySoft,
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: Text('AI Health',
-                      style: AppTheme.font(size: 9.5, weight: FontWeight.w800, color: AppTheme.primaryDark)),
+                  child: Text('Kesehatan Personal',
+                      style: AppTheme.font(
+                          size: 9.5,
+                          weight: FontWeight.w800,
+                          color: AppTheme.primaryDark)),
                 ),
               ],
             ),
@@ -149,15 +500,60 @@ class _PedagogyDashboard extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const PulsingStatusDot(size: 6, color: AppTheme.statusGreen),
+                PulsingStatusDot(
+                  size: 6,
+                  color: w.hasServerSamples || s.hasCaparRecords
+                      ? AppTheme.statusGreen
+                      : AppTheme.textMuted,
+                ),
                 const SizedBox(width: 5),
-                Text('Sensor Aktif • ${w.deviceName}',
-                    style: AppTheme.font(size: 11, color: AppTheme.textSecondary, weight: FontWeight.w500)),
+                Text(
+                  w.hasServerSamples
+                      ? 'Sampel wearable dari server • ${w.deviceName}'
+                      : s.hasCaparRecords
+                          ? 'Riwayat CAPAR tersedia dari server'
+                          : 'Belum ada data wearable dari server',
+                  style: AppTheme.font(
+                      size: 11,
+                      color: AppTheme.textSecondary,
+                      weight: FontWeight.w500),
+                ),
               ],
             ),
           ],
         ),
         actions: [
+          Container(
+            margin: const EdgeInsets.only(right: 6),
+            decoration: const BoxDecoration(
+              color: AppTheme.primarySoft,
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.smart_toy_outlined,
+                  color: AppTheme.primary, size: 20),
+              tooltip: 'Tanya Chatbot AI (Dr. Vidya)',
+              onPressed: onNavigateToChat,
+            ),
+          ),
+          Container(
+            margin: const EdgeInsets.only(right: 6),
+            decoration: const BoxDecoration(
+              color: AppTheme.primarySoft,
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.science_outlined,
+                  color: AppTheme.primary, size: 20),
+              tooltip: 'Eksperimen Interaktif (Tahap 1-6)',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ExperimentFlowScreen(),
+                ),
+              ),
+            ),
+          ),
           Container(
             margin: const EdgeInsets.only(right: 12),
             decoration: const BoxDecoration(
@@ -165,409 +561,854 @@ class _PedagogyDashboard extends StatelessWidget {
               shape: BoxShape.circle,
             ),
             child: IconButton(
-              icon: const Icon(Icons.sync_rounded, color: AppTheme.primary, size: 20),
-              tooltip: 'Sinkronkan Sensor',
-              onPressed: () {
-                s.syncWearable();
-                showSaved(context, 'Sensor wearable berhasil disinkronkan');
+              icon: const Icon(Icons.sync_rounded,
+                  color: AppTheme.primary, size: 20),
+              tooltip: 'Sinkronkan Sensor & Data',
+              onPressed: () async {
+                final synced = await s.syncWearable();
+                if (context.mounted) {
+                  if (!synced) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content: Text(s.dataError ?? 'Sinkronisasi gagal.')),
+                    );
+                  } else if (s.wearableSamples.isEmpty && !s.hasCaparRecords) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content: Text(s.dataError ??
+                              'Belum ada sampel wearable tersimpan di server.')),
+                    );
+                  } else if (s.wearableSamples.isEmpty) {
+                    showSaved(context, 'Riwayat CAPAR diperbarui dari server');
+                  } else {
+                    showSaved(context,
+                        'Sampel wearable dan analisis diperbarui dari server');
+                  }
+                }
               },
             ),
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 32),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 1. User Greeting & Date Banner
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppTheme.borderLight),
-                boxShadow: AppTheme.shadowSoft,
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: const BoxDecoration(
-                            gradient: AppTheme.primaryGradient,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: Text(
-                              s.userProfile.name.isNotEmpty ? s.userProfile.name.substring(0, 1).toUpperCase() : 'U',
-                              style: AppTheme.font(size: 14.5, weight: FontWeight.w800, color: Colors.white),
+      body: RefreshIndicator(
+        onRefresh: () => s.refreshAllData(),
+        color: AppTheme.primary,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics()),
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 32),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 1. User Greeting & Date Banner
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppTheme.borderLight),
+                  boxShadow: AppTheme.shadowSoft,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: const BoxDecoration(
+                              gradient: AppTheme.primaryGradient,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: Text(
+                                s.userProfile.name.isNotEmpty
+                                    ? s.userProfile.name
+                                        .substring(0, 1)
+                                        .toUpperCase()
+                                    : 'U',
+                                style: AppTheme.font(
+                                    size: 14.5,
+                                    weight: FontWeight.w800,
+                                    color: Colors.white),
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Halo, ${s.userProfile.name} 👋',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTheme.font(
+                                      size: 13.5,
+                                      weight: FontWeight.w800,
+                                      color: AppTheme.textPrimary),
+                                ),
+                                DateLine(date: s.logDate),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 9, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.statusGreenBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color:
+                                AppTheme.statusGreen.withValues(alpha: 0.35)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          PulsingStatusDot(
+                            size: 6,
+                            color: w.hasServerSamples || s.hasCaparRecords
+                                ? AppTheme.statusGreen
+                                : AppTheme.textMuted,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            w.hasServerSamples
+                                ? 'Data server tersedia'
+                                : s.hasCaparRecords
+                                    ? 'Riwayat CAPAR tersedia'
+                                    : 'Belum ada data',
+                            style: AppTheme.font(
+                              size: 10.5,
+                              weight: FontWeight.w700,
+                              color: w.hasServerSamples || s.hasCaparRecords
+                                  ? AppTheme.statusGreen
+                                  : AppTheme.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              if (caparStatus == 'link_required') ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.statusOrange.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: AppTheme.statusOrange.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Text(
+                    'Akun CAPAR lama belum tertaut, jadi baseline, segment, dan episode belum bisa ditampilkan. Buka Profil → Tautkan Akun CAPAR dan verifikasi dengan kata sandi akun pasien lama.',
+                    style: AppTheme.font(
+                      size: 12,
+                      color: AppTheme.textPrimary,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+
+              // ACC Sudden Movement Alert Banner (Duduk -> Pergerakan ACC)
+              if (s.showActivityMovementPrompt) ...[
+                const SizedBox(height: 12),
+                _AccMovementAlertBanner(
+                  currentActivity: s.activity,
+                  suggestedActivity: s.suggestedActivity,
+                  analysis: s.movementAnalysis,
+                  onConfirm: () =>
+                      s.confirmActivityTransition(s.suggestedActivity),
+                  onDismiss: () => s.dismissActivityMovementPrompt(),
+                  onSelectOther: () => _showActivitySelectionModal(context, s),
+                ),
+              ],
+
+              const SizedBox(height: 14),
+
+              // 2. Realtime Physiological Metrics Card
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF0D5C43), Color(0xFF147A5A)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(22),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF0B7A5A).withValues(alpha: 0.3),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                'Halo, ${s.userProfile.name} 👋',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTheme.font(size: 13.5, weight: FontWeight.w800, color: AppTheme.textPrimary),
+                              Row(
+                                children: [
+                                  const Icon(Icons.favorite,
+                                      color: AppTheme.faceRed, size: 20),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Detak Jantung',
+                                    style: AppTheme.font(
+                                        size: 13,
+                                        color: Colors.white
+                                            .withValues(alpha: 0.85),
+                                        weight: FontWeight.w600),
+                                  ),
+                                ],
                               ),
-                              DateLine(date: s.logDate),
+                              const SizedBox(height: 4),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.baseline,
+                                textBaseline: TextBaseline.alphabetic,
+                                children: [
+                                  Text(
+                                    w.heartRate > 0 ? '${w.heartRate}' : '—',
+                                    style: AppTheme.font(
+                                        size: 38,
+                                        weight: FontWeight.w900,
+                                        color: Colors.white,
+                                        height: 1.0),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'bpm',
+                                    style: AppTheme.font(
+                                        size: 14,
+                                        color: Colors.white70,
+                                        weight: FontWeight.w600),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                s.hasCaparMetrics
+                                    ? 'Deviasi personal: ${s.latestCaparMahalanobis?['distance'] ?? '—'}'
+                                    : 'Analisis baseline personal belum tersedia',
+                                style: AppTheme.font(
+                                    size: 11,
+                                    color: Colors.white.withValues(alpha: 0.9)),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          width: 1,
+                          height: 100,
+                          color: Colors.white.withValues(alpha: 0.18),
+                          margin: const EdgeInsets.symmetric(horizontal: 10),
+                        ),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      w.hasServerSamples
+                                          ? w.deviceName
+                                          : 'Wearable belum tersedia',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AppTheme.font(
+                                          size: 13.5,
+                                          weight: FontWeight.w800,
+                                          color: Colors.white),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Text(
+                                  'Tersinkron: ${w.lastSync == null ? 'Belum tersedia' : fmtTime(TimeOfDay.fromDateTime(w.lastSync!))}',
+                                  style: AppTheme.font(
+                                      size: 10.5, color: Colors.white70)),
+                              const SizedBox(height: 8),
+                              _metricRow('Pemulihan (HRV)',
+                                  w.hrvRmssd > 0 ? '${w.hrvRmssd} ms' : '—'),
+                              _metricRow(
+                                  w.stepsEstimatedFromAcc
+                                      ? 'Perkiraan langkah (ACC)'
+                                      : 'Langkah Harian',
+                                  w.steps > 0 ? '${w.steps} lk' : '—'),
+                              _metricRow('Kadar Oksigen (SpO₂)',
+                                  w.spO2 > 0 ? '${w.spO2}%' : '—'),
+                              _metricRow('Suhu Kulit',
+                                  w.skinTemp > 0 ? '${w.skinTemp}°C' : '—'),
                             ],
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppTheme.statusGreenBg,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: AppTheme.statusGreen.withValues(alpha: 0.35)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const PulsingStatusDot(size: 6, color: AppTheme.statusGreen),
-                        const SizedBox(width: 5),
-                        Text('Live BLE',
-                            style: AppTheme.font(size: 10.5, weight: FontWeight.w700, color: AppTheme.statusGreen)),
-                      ],
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
 
-            const SizedBox(height: 14),
-
-            // 2. Continuous Sensing Hero Card (Smartwatch + Live Vitals)
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                gradient: AppTheme.heroGradient,
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: AppTheme.shadowCard,
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+                        // 3. Laporan Harian (Menggabungkan CAPAR, Pintasan Cepat, dan Panduan Tindakan menjadi satu link rapi)
+              InkWell(
+                onTap: onNavigateToInput,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppTheme.borderLight, width: 1.2),
+                    boxShadow: AppTheme.shadowSoft,
+                  ),
+                  child: Row(
                     children: [
-                      WatchFace(
-                        width: 96,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              fmtTime(TimeOfDay.fromDateTime(w.lastSync)),
-                              style: AppTheme.font(size: 9, color: Colors.white70, height: 1.1),
-                            ),
-                            const SizedBox(height: 1),
-                            const Icon(Icons.favorite, size: 12, color: AppTheme.faceRed),
-                            Text(
-                              '${w.heartRate}',
-                              style: AppTheme.font(size: 16.5, weight: FontWeight.w800, color: Colors.white, height: 1.1),
-                            ),
-                            Text('bpm', style: AppTheme.font(size: 7.5, color: Colors.white70, height: 1.0)),
-                            const SizedBox(height: 2),
-                            const PulseLine(color: AppTheme.accentMint, height: 10),
-                          ],
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFE2F5EF),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.edit_note_rounded,
+                          color: Color(0xFF007A64),
+                          size: 26,
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               children: [
-                                Expanded(
-                                  child: Text(
-                                    w.deviceName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: AppTheme.font(size: 15, weight: FontWeight.w800, color: Colors.white),
+                                Text(
+                                  'Laporan Harian',
+                                  style: AppTheme.font(
+                                    size: 15,
+                                    weight: FontWeight.w800,
+                                    color: const Color(0xFF0F2B3C),
                                   ),
                                 ),
-                                const SizedBox(width: 4),
+                                const SizedBox(width: 8),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 7, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.18),
-                                    borderRadius: BorderRadius.circular(8),
+                                    color: const Color(0xFFE2F5EF),
+                                    borderRadius: BorderRadius.circular(6),
                                   ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(Icons.battery_charging_full_rounded, color: AppTheme.accentMint, size: 12),
-                                      const SizedBox(width: 2),
-                                      Text('${w.batteryPercent}%', style: AppTheme.font(size: 9.5, color: Colors.white, weight: FontWeight.w700)),
-                                    ],
+                                  child: Text(
+                                    'Input',
+                                    style: AppTheme.font(
+                                      size: 10,
+                                      weight: FontWeight.w800,
+                                      color: const Color(0xFF007A64),
+                                    ),
                                   ),
                                 ),
                               ],
                             ),
-                            Text('Tersinkron: ${fmtTime(TimeOfDay.fromDateTime(w.lastSync))}',
-                                style: AppTheme.font(size: 11, color: Colors.white70)),
-                            const SizedBox(height: 10),
-                            _metricRow('Detak Jantung (HR)', '${w.heartRate} bpm'),
-                            _metricRow('Variabilitas HR (RMSSD)', '${w.hrvRmssd} ms'),
-                            _metricRow('Aktivitas Harian', '${w.steps} lk'),
-                            _metricRow('Saturasi SpO₂ Nokturnal', '${w.spO2}%'),
-                            _metricRow('Suhu Kulit Basal', '${w.skinTemp}°C'),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Catat gejala, aktivitas, tidur, dan kondisi harian Anda',
+                              style: AppTheme.font(
+                                size: 12,
+                                color: const Color(0xFF6B807B),
+                                height: 1.3,
+                              ),
+                            ),
                           ],
                         ),
                       ),
+                      const Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        color: Color(0xFF90A39E),
+                        size: 16,
+                      ),
                     ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              // Chatbot AI Dr. Vidya Quick Banner
+              InkWell(
+                onTap: onNavigateToChat,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFF0FDF4), Color(0xFFE6FFFA)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFB7E4D8), width: 1.2),
+                    boxShadow: AppTheme.shadowSoft,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(11),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF007A64),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.smart_toy_rounded,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  'Tanya Chatbot AI (Dr. Vidya)',
+                                  style: AppTheme.font(
+                                    size: 14.5,
+                                    weight: FontWeight.w800,
+                                    color: const Color(0xFF0B463A),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF007A64),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    'Gemini AI',
+                                    style: AppTheme.font(
+                                      size: 9.5,
+                                      weight: FontWeight.w800,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Konsultasi deviasi denyut jantung, rileksasi, & tips pola hidup sehat',
+                              style: AppTheme.font(
+                                size: 11.5,
+                                color: const Color(0xFF234E43),
+                                height: 1.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        color: Color(0xFF007A64),
+                        size: 15,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              // 6. Card: Riwayat Pemantauan 24 Jam Pasien
+              InkWell(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const PatientJourneyScreen()),
+                ),
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF064E3B), Color(0xFF0F766E)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: AppTheme.shadowCard,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.18),
+                            shape: BoxShape.circle),
+                        child: const Icon(Icons.timeline_rounded,
+                            color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Riwayat Pemantauan',
+                                style: AppTheme.font(
+                                    size: 13.5,
+                                    weight: FontWeight.w800,
+                                    color: Colors.white)),
+                            const SizedBox(height: 2),
+                            Text(
+                                'Event ${s.events.length} • Sampel wearable ${s.wearableSamples.length}',
+                                style: AppTheme.font(
+                                    size: 11.5, color: Colors.white70)),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.arrow_forward_ios_rounded,
+                          color: Colors.white70, size: 15),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ActionTrackingScreen(),
+                        ),
+                      ),
+                      icon: const Icon(Icons.task_alt_outlined, size: 18),
+                      label: const Text('Tindakan'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ImpactDashboardScreen(),
+                        ),
+                      ),
+                      icon: const Icon(Icons.insights_outlined, size: 18),
+                      label: const Text('Dampak & keselamatan'),
+                    ),
                   ),
                 ],
               ),
-            ),
 
-            const SizedBox(height: 14),
+              const SizedBox(height: 12),
 
-            // 3. Quick Recovery & Readiness Score Card
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppTheme.borderLight),
-                boxShadow: AppTheme.shadowSoft,
-              ),
-              child: Row(
-                children: [
-                  const CircularScoreGauge(
-                    score: 82,
-                    size: 82,
-                    subtitle: 'Prima',
-                    primaryColor: AppTheme.accent,
+              // Menu Tambahan: Eksperimen Interaksi & Deviasi (Tahap 1–6)
+              InkWell(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ExperimentFlowScreen(),
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Indeks Kesiapan & Pemulihan',
-                            style: AppTheme.font(size: 13.5, weight: FontWeight.w800, color: AppTheme.textPrimary)),
-                        const SizedBox(height: 3),
-                        Text(
-                          'Sistem otonom stabil. Tubuh siap untuk aktivitas harian normal.',
-                          style: AppTheme.font(size: 11, color: AppTheme.textSecondary, height: 1.3),
+                ),
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF005B48), Color(0xFF007A64)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: AppTheme.shadowCard,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.18),
+                          shape: BoxShape.circle,
                         ),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 4,
-                          crossAxisAlignment: WrapCrossAlignment.center,
+                        child: const Icon(
+                          Icons.science_outlined,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  'Eksperimen',
+                                  style: AppTheme.font(
+                                    size: 13.5,
+                                    weight: FontWeight.w800,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.22),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    'Tahap 1–6',
+                                    style: AppTheme.font(
+                                      size: 9.5,
+                                      weight: FontWeight.w800,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Persiapan, deviasi HR, respons pengguna & interpretasi multi-lapisan',
+                              style: AppTheme.font(
+                                size: 11.5,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        color: Colors.white70,
+                        size: 15,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              // Menu Kuesioner Evaluasi: SUS & NASA-TLX
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppTheme.borderLight),
+                  boxShadow: AppTheme.shadowSoft,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
                           children: [
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                              decoration: BoxDecoration(
-                                color: AppTheme.primarySoft,
-                                borderRadius: BorderRadius.circular(6),
+                              padding: const EdgeInsets.all(7),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFEFF6FF),
+                                shape: BoxShape.circle,
                               ),
-                              child: Text('Baseline Normal',
-                                  style: AppTheme.font(size: 9.5, weight: FontWeight.w700, color: AppTheme.primaryDark)),
+                              child: const Icon(
+                                Icons.assignment_turned_in_rounded,
+                                color: Color(0xFF2563EB),
+                                size: 18,
+                              ),
                             ),
-                            Text('HRV +4 ms • D(t) Stabil',
-                                style: AppTheme.font(size: 10, color: AppTheme.textMuted, weight: FontWeight.w600)),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Kuesioner Evaluasi',
+                              style: AppTheme.font(
+                                size: 14,
+                                weight: FontWeight.w800,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
                           ],
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            'SUS & NASA-TLX',
+                            style: AppTheme.font(
+                              size: 10,
+                              weight: FontWeight.w800,
+                              color: const Color(0xFF2563EB),
+                            ),
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 14),
-
-            // 4. Quick Daily Action Shortcuts
-            Row(
-              children: [
-                Expanded(
-                  child: _quickShortcutTile(
-                    context,
-                    label: 'Gejala',
-                    icon: Icons.sick_outlined,
-                    color: AppTheme.faceGreen,
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SymptomInputScreen())),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _quickShortcutTile(
-                    context,
-                    label: 'Aktivitas',
-                    icon: Icons.directions_run_rounded,
-                    color: const Color(0xFF0284C7),
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityInputScreen())),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _quickShortcutTile(
-                    context,
-                    label: 'Tidur',
-                    icon: Icons.bedtime_outlined,
-                    color: const Color(0xFF7C5CDB),
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SleepInputScreen())),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _quickShortcutTile(
-                    context,
-                    label: 'Event',
-                    icon: Icons.bookmark_add_outlined,
-                    color: const Color(0xFFD97706),
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EventMarkerScreen())),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 14),
-
-            // 5. Action Engine Banner (Triage Protocol - Mockup Halaman 9)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: triage.bgColor,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: triage.color.withValues(alpha: 0.35), width: 1.2),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
-                        decoration: BoxDecoration(
-                          color: triage.color,
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: triage.color.withValues(alpha: 0.3),
-                              blurRadius: 6,
-                              offset: const Offset(0, 2),
-                            )
-                          ],
+                    const SizedBox(height: 6),
+                    Text(
+                      'Mohon berikan penilaian Anda terhadap penggunaan aplikasi Vidyamedic:',
+                      style: AppTheme.font(
+                        size: 11.5,
+                        color: AppTheme.textSecondary,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF2563EB),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 11),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 0,
+                            ),
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const SusQuestionnaireScreen(),
+                              ),
+                            ),
+                            icon: const Icon(Icons.checklist_rounded, size: 16),
+                            label: const Text('Kuesioner SUS',
+                                style: TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w700)),
+                          ),
                         ),
-                        child: Text(
-                          triage.code,
-                          style: AppTheme.font(size: 11, weight: FontWeight.w800, color: Colors.white),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF1D4ED8),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 11),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 0,
+                            ),
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    const NasaTlxQuestionnaireScreen(),
+                              ),
+                            ),
+                            icon: const Icon(Icons.speed_rounded, size: 16),
+                            label: const Text('Kuesioner NASA-TLX',
+                                style: TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w700)),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 9),
-                      Expanded(
-                        child: Text(
-                          triage.title,
-                          style: AppTheme.font(size: 14, weight: FontWeight.w700, color: AppTheme.textPrimary),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    triage.description,
-                    style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary, height: 1.35),
-                  ),
-                  const SizedBox(height: 10),
-                  InkWell(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const ActionGuidanceScreen()),
+                      ],
                     ),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6.5),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.9),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: triage.color.withValues(alpha: 0.25)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('Lihat Panduan Tindakan Lengkap',
-                              style: AppTheme.font(size: 12, weight: FontWeight.w700, color: triage.color)),
-                          const SizedBox(width: 4),
-                          Icon(Icons.arrow_forward_rounded, size: 14, color: triage.color),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 14),
-
-            // 6. Card: Patient Journey Simulation (Mockup Halaman 15)
-            InkWell(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const PatientJourneyScreen()),
-              ),
-              borderRadius: BorderRadius.circular(20),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF064E3B), Color(0xFF0F766E)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: AppTheme.shadowCard,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.18), shape: BoxShape.circle),
-                      child: const Icon(Icons.timeline_rounded, color: Colors.white, size: 22),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Simulasi Patient Journey (1x24 Jam)',
-                              style: AppTheme.font(size: 13.5, weight: FontWeight.w800, color: Colors.white)),
-                          const SizedBox(height: 2),
-                          Text('Alur temporal: Baseline → Deviasi → Recovery',
-                              style: AppTheme.font(size: 11.5, color: Colors.white70)),
-                        ],
-                      ),
-                    ),
-                    const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 15),
                   ],
                 ),
               ),
-            ),
 
-            const SectionTitle('Enam Pertanyaan Pedagogi Kesehatan (CAPAR)',
-                padding: EdgeInsets.only(top: 22, bottom: 12)),
+              // 7. Scientific Evidence RAG / Wawasan Medis Pasien
+              if (s.scientificCitations.isNotEmpty) ...[
+                const SectionTitle('Wawasan Medis & Edukasi Terkait',
+                    padding: EdgeInsets.only(top: 22, bottom: 10)),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppTheme.borderLight),
+                    boxShadow: AppTheme.shadowSoft,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.menu_book_outlined,
+                              color: AppTheme.primary, size: 18),
+                          const SizedBox(width: 8),
+                          Text('Informasi Ilmiah untuk Pasien',
+                              style: AppTheme.font(
+                                  size: 13,
+                                  weight: FontWeight.w700,
+                                  color: AppTheme.primaryDark)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ...s.scientificCitations.take(2).map((c) => Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: AppTheme.fieldFill,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(c.title,
+                                      style: AppTheme.font(
+                                          size: 12.5, weight: FontWeight.w700)),
+                                  const SizedBox(height: 3),
+                                  Text(c.summary,
+                                      style: AppTheme.font(
+                                          size: 11.5,
+                                          color: AppTheme.textSecondary,
+                                          height: 1.3)),
+                                ],
+                              ),
+                            ),
+                          )),
+                    ],
+                  ),
+                ),
+              ],
 
-            // 7. The 6 CAPAR Pedagogical Framework Tiles
-            ...s.pedagogyAnswers.map((p) => _PedagogyTile(item: p)),
-          ],
+              const SectionTitle('6 Panduan Memahami Tubuh Anda',
+                  padding: EdgeInsets.only(top: 22, bottom: 12)),
+
+              // 8. The 6 Pedagogical Framework Tiles
+              ...s.pedagogyAnswers.map((p) => _PedagogyTile(item: p)),
+            ],
+          ),
         ),
       ),
     );
@@ -588,49 +1429,278 @@ class _PedagogyDashboard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 4),
-          Text(val, style: AppTheme.font(size: 10.5, weight: FontWeight.w700, color: Colors.white)),
+          Text(val,
+              style: AppTheme.font(
+                  size: 10.5, weight: FontWeight.w700, color: Colors.white)),
         ],
       ),
     );
   }
+}
 
-  Widget _quickShortcutTile(
-    BuildContext context, {
-    required String label,
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-        decoration: BoxDecoration(
+// ---------------------------------------------------------------------------
+// Helper: ACC Movement Activity Selection Modal
+// ---------------------------------------------------------------------------
+void _showActivitySelectionModal(BuildContext context, AppState s) {
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (sheetContext) {
+      var isSaving = false;
+      return Container(
+        decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppTheme.borderLight),
-          boxShadow: AppTheme.shadowSoft,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 32),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.borderLight,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
-              child: Icon(icon, size: 17, color: color),
             ),
-            const SizedBox(height: 5),
+            const SizedBox(height: 16),
+            Text('Sedang apa Anda sekarang?',
+                style: AppTheme.font(size: 16, weight: FontWeight.w700)),
+            const SizedBox(height: 4),
             Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppTheme.font(size: 11, weight: FontWeight.w700, color: AppTheme.textPrimary),
+              'Sensor mendeteksi pergerakan. Pilih aktivitas yang paling sesuai.',
+              style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: kActivities.map((act) {
+                final isSelected = s.activity == act.$1;
+                return GestureDetector(
+                  onTap: () async {
+                    if (isSaving) return;
+                    isSaving = true;
+                    final saved = await s.confirmActivityTransition(act.$1);
+                    if (!sheetContext.mounted) return;
+                    if (saved) {
+                      Navigator.pop(sheetContext);
+                    } else {
+                      isSaving = false;
+                      ScaffoldMessenger.of(sheetContext).showSnackBar(
+                        SnackBar(
+                          content: Text(s.dataError ??
+                              'Konfirmasi aktivitas gagal disimpan.'),
+                        ),
+                      );
+                    }
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: isSelected ? AppTheme.primary : Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: isSelected
+                            ? AppTheme.primary
+                            : AppTheme.borderLight,
+                        width: isSelected ? 2 : 1,
+                      ),
+                      boxShadow: isSelected ? AppTheme.shadowSoft : null,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(act.$2,
+                            size: 17,
+                            color: isSelected
+                                ? Colors.white
+                                : AppTheme.textSecondary),
+                        const SizedBox(width: 6),
+                        Text(act.$1,
+                            style: AppTheme.font(
+                              size: 13,
+                              weight: FontWeight.w600,
+                              color: isSelected
+                                  ? Colors.white
+                                  : AppTheme.textPrimary,
+                            )),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () {
+                s.dismissActivityMovementPrompt();
+                Navigator.pop(context);
+              },
+              child: Text('Abaikan',
+                  style:
+                      AppTheme.font(size: 13, color: AppTheme.textSecondary)),
             ),
           ],
         ),
+      );
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Widget: ACC Sudden Movement Alert Banner
+// ---------------------------------------------------------------------------
+class _AccMovementAlertBanner extends StatelessWidget {
+  final String currentActivity;
+  final String suggestedActivity;
+  final LocomotionAnalysis? analysis;
+  final Future<bool> Function() onConfirm;
+  final VoidCallback onDismiss;
+  final VoidCallback onSelectOther;
+
+  const _AccMovementAlertBanner({
+    required this.currentActivity,
+    required this.suggestedActivity,
+    required this.analysis,
+    required this.onConfirm,
+    required this.onDismiss,
+    required this.onSelectOther,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E1),
+        borderRadius: BorderRadius.circular(16),
+        border:
+            Border.all(color: const Color(0xFFFFCC02).withValues(alpha: 0.6)),
+        boxShadow: AppTheme.shadowSoft,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFCC02).withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.directions_walk,
+                    color: Color(0xFFB7850A), size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Terdeteksi pergerakan!',
+                      style: AppTheme.font(
+                          size: 13,
+                          weight: FontWeight.w700,
+                          color: const Color(0xFF7A5C00)),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Pola akselerometer menyerupai $suggestedActivity. Apakah Anda sedang $suggestedActivity? Ini perkiraan sensor, bukan kepastian.',
+                      style: AppTheme.font(
+                          size: 11.5,
+                          color: const Color(0xFF7A5C00),
+                          height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                onTap: onDismiss,
+                child:
+                    const Icon(Icons.close, size: 18, color: Color(0xFF7A5C00)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Aturan non-klinis: resultan = √(x²+y²+z²), lalu delta resultan dibanding rerata lokal (tanpa normalisasi sumbu). Minimal ${ActivityMotionPolicy.demo.minimumSampleSeconds.toStringAsFixed(0)} detik; cadence ${ActivityMotionPolicy.demo.minimumCadenceHz.toStringAsFixed(1)}–${ActivityMotionPolicy.demo.maximumCadenceHz.toStringAsFixed(1)} Hz; berlari mulai ${ActivityMotionPolicy.demo.runningCadenceHz.toStringAsFixed(1)} Hz; prominence ≥${ActivityMotionPolicy.demo.minimumPeakProminenceG.toStringAsFixed(2)} g; variasi interval ≤${(ActivityMotionPolicy.demo.maximumIntervalVariation * 100).round()}%.',
+            style: AppTheme.font(
+              size: 10.5,
+              color: const Color(0xFF7A5C00),
+              height: 1.35,
+            ),
+          ),
+          if (analysis != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Terukur: ${analysis!.cadenceHz.toStringAsFixed(2)} Hz • ${analysis!.peakCount} puncak • RMS delta resultan ${analysis!.rmsDeltaMagnitudeG.toStringAsFixed(3)} g • variasi ${(analysis!.intervalVariation * 100).toStringAsFixed(1)}%.',
+              style: AppTheme.font(
+                size: 10.5,
+                color: const Color(0xFF7A5C00),
+                height: 1.35,
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () async {
+                    final saved = await onConfirm();
+                    if (!saved && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              'Konfirmasi aktivitas gagal disimpan. Periksa koneksi lalu coba lagi.'),
+                        ),
+                      );
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFCC02),
+                    foregroundColor: const Color(0xFF4A3800),
+                    padding: const EdgeInsets.symmetric(vertical: 9),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    elevation: 0,
+                  ),
+                  child: Text('Ya, Sedang $suggestedActivity',
+                      style: AppTheme.font(
+                          size: 12,
+                          weight: FontWeight.w700,
+                          color: const Color(0xFF4A3800))),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: onSelectOther,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF7A5C00),
+                  side: const BorderSide(color: Color(0xFFFFCC02)),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 9, horizontal: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                child: Text('Pilih Lain',
+                    style: AppTheme.font(
+                        size: 12,
+                        weight: FontWeight.w600,
+                        color: const Color(0xFF7A5C00))),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -685,12 +1755,16 @@ class _PedagogyTile extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: AppTheme.primarySoft,
                     shape: BoxShape.circle,
-                    border: Border.all(color: AppTheme.primaryLight.withValues(alpha: 0.3)),
+                    border: Border.all(
+                        color: AppTheme.primaryLight.withValues(alpha: 0.3)),
                   ),
                   child: Center(
                     child: Text(
                       '${item.number}',
-                      style: AppTheme.font(size: 13.5, weight: FontWeight.w800, color: AppTheme.primaryDark),
+                      style: AppTheme.font(
+                          size: 13.5,
+                          weight: FontWeight.w800,
+                          color: AppTheme.primaryDark),
                     ),
                   ),
                 ),
@@ -705,18 +1779,23 @@ class _PedagogyTile extends StatelessWidget {
                           Expanded(
                             child: Text(
                               item.question,
-                              style: AppTheme.font(size: 14, weight: FontWeight.w700),
+                              style: AppTheme.font(
+                                  size: 13.5, weight: FontWeight.w700),
                             ),
                           ),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 2),
                             decoration: BoxDecoration(
                               color: item.statusColor.withValues(alpha: 0.12),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
                               item.status,
-                              style: AppTheme.font(size: 10.5, weight: FontWeight.w700, color: item.statusColor),
+                              style: AppTheme.font(
+                                  size: 10.5,
+                                  weight: FontWeight.w700,
+                                  color: item.statusColor),
                             ),
                           ),
                         ],
@@ -724,7 +1803,10 @@ class _PedagogyTile extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         item.summary,
-                        style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary, height: 1.3),
+                        style: AppTheme.font(
+                            size: 12,
+                            color: AppTheme.textSecondary,
+                            height: 1.3),
                       ),
                       const SizedBox(height: 8),
                       Wrap(
@@ -736,10 +1818,14 @@ class _PedagogyTile extends StatelessWidget {
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text('Buka Analisis Detail',
-                                  style: AppTheme.font(size: 11.5, weight: FontWeight.w700, color: AppTheme.primary)),
+                              Text('Lihat Penjelasan Detail',
+                                  style: AppTheme.font(
+                                      size: 11.5,
+                                      weight: FontWeight.w700,
+                                      color: AppTheme.primary)),
                               const SizedBox(width: 4),
-                              const Icon(Icons.arrow_forward, size: 12, color: AppTheme.primary),
+                              const Icon(Icons.arrow_forward,
+                                  size: 12, color: AppTheme.primary),
                             ],
                           ),
                           InkWell(
@@ -750,14 +1836,18 @@ class _PedagogyTile extends StatelessWidget {
                               builder: (_) => PedagogyDetailSheet(answer: item),
                             ),
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 4, vertical: 2),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Icon(Icons.info_outline, size: 13, color: AppTheme.textMuted),
+                                  const Icon(Icons.help_outline_rounded,
+                                      size: 13, color: AppTheme.textMuted),
                                   const SizedBox(width: 3),
-                                  Text('Info Algoritma',
-                                      style: AppTheme.font(size: 10.5, color: AppTheme.textMuted)),
+                                  Text('Cara Analisis',
+                                      style: AppTheme.font(
+                                          size: 10.5,
+                                          color: AppTheme.textMuted)),
                                 ],
                               ),
                             ),
@@ -777,7 +1867,7 @@ class _PedagogyTile extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Tab 1: Peta Lengkap Input Mobile (Mockup Halaman 2, 4, 5)
+// Tab 1: Peta Lengkap Input Mobile
 // ---------------------------------------------------------------------------
 class _InputFlowTab extends StatelessWidget {
   const _InputFlowTab();
@@ -789,7 +1879,11 @@ class _InputFlowTab extends StatelessWidget {
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: Text('Alur Input Harian', style: AppTheme.font(size: 17, weight: FontWeight.w800, color: AppTheme.primaryDark)),
+        title: Text('Alur Catat Harian',
+            style: AppTheme.font(
+                size: 17,
+                weight: FontWeight.w800,
+                color: AppTheme.primaryDark)),
       ),
       body: ListView(
         physics: const BouncingScrollPhysics(),
@@ -818,7 +1912,8 @@ class _InputFlowTab extends StatelessWidget {
                         color: Colors.white.withValues(alpha: 0.2),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.playlist_play_rounded, color: Colors.white, size: 22),
+                      child: const Icon(Icons.playlist_play_rounded,
+                          color: Colors.white, size: 22),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -826,12 +1921,16 @@ class _InputFlowTab extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Alur Input Harian Terpadu',
-                            style: AppTheme.font(size: 15, weight: FontWeight.w800, color: Colors.white),
+                            'Panduan Pengisian Harian',
+                            style: AppTheme.font(
+                                size: 15,
+                                weight: FontWeight.w800,
+                                color: Colors.white),
                           ),
                           Text(
-                            'Langkah 5 s/d 11 secara berurutan',
-                            style: AppTheme.font(size: 12, color: Colors.white70),
+                            'Pengisian bertahap yang mudah & praktis',
+                            style:
+                                AppTheme.font(size: 12, color: Colors.white70),
                           ),
                         ],
                       ),
@@ -847,15 +1946,21 @@ class _InputFlowTab extends StatelessWidget {
                       backgroundColor: Colors.white,
                       foregroundColor: AppTheme.primaryDark,
                       elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                     ),
                     onPressed: () => Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const GuidedDailyFlowScreen(initialStep: 5)),
+                      MaterialPageRoute(
+                          builder: (_) =>
+                              const GuidedDailyFlowScreen(initialStep: 5)),
                     ),
                     child: Text(
-                      'Mulai Input Harian (Langkah 5 - 11) →',
-                      style: AppTheme.font(size: 13, weight: FontWeight.w800, color: AppTheme.primaryDark),
+                      'Mulai Catat Hari Ini →',
+                      style: AppTheme.font(
+                          size: 13,
+                          weight: FontWeight.w800,
+                          color: AppTheme.primaryDark),
                     ),
                   ),
                 ),
@@ -864,65 +1969,112 @@ class _InputFlowTab extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
-          Text('Atau buka langkah tertentu secara langsung:',
-              style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary, weight: FontWeight.w700)),
+          Text('Atau pilih menu yang ingin Anda catat:',
+              style: AppTheme.font(
+                  size: 12.5,
+                  color: AppTheme.textSecondary,
+                  weight: FontWeight.w700)),
           const SizedBox(height: 10),
 
           _FlowStepCard(
-            stepNumber: 5,
-            title: 'Konteks Aktivitas & Gaya Hidup',
-            desc: 'Aktivitas: ${s.activity} • Stres: ${s.stress.label}',
+            stepNumber: 1,
+            title: 'Aktivitas & Gaya Hidup',
+            desc:
+                'Aktivitas: ${s.activity} • Stres: ${s.stress?.label ?? 'Belum dicatat'}',
             icon: Icons.directions_run_outlined,
             color: const Color(0xFF0284C7),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityInputScreen())),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const ActivityInputScreen())),
           ),
           _FlowStepCard(
-            stepNumber: 6,
-            title: 'Gejala & Perasaan (Catat Hari Ini)',
-            desc: 'Perasaan: ${s.mood.label} • Gejala: ${s.symptoms.join(", ")}',
+            stepNumber: 2,
+            title: 'Gejala & Perasaan',
+            desc:
+                'Perasaan: ${s.mood.label} • Gejala: ${s.symptoms.join(", ")}',
             icon: Icons.groups_2_outlined,
             color: AppTheme.faceGreen,
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SymptomInputScreen())),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const SymptomInputScreen())),
           ),
           _FlowStepCard(
-            stepNumber: 7,
-            title: 'Input Tidur (Tidur Malam Ini)',
+            stepNumber: 3,
+            title: 'Kualitas & Durasi Tidur',
             desc: '${s.sleepDurationLabel} (${s.sleepQuality.label})',
             icon: Icons.bedtime_outlined,
             color: const Color(0xFF7C5CDB),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SleepInputScreen())),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const SleepInputScreen())),
           ),
           _FlowStepCard(
-            stepNumber: 8,
-            title: 'Pengukuran Manual (Opsional)',
-            desc: 'TD, Suhu, Berat, SpO₂, Glukosa',
+            stepNumber: 4,
+            title: 'Pengukuran Mandiri (Opsional)',
+            desc: 'Tekanan darah, suhu, berat badan, SpO₂',
             icon: Icons.speed_outlined,
             color: const Color(0xFF059669),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ManualMeasurementScreen())),
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ManualMeasurementScreen())),
           ),
           _FlowStepCard(
-            stepNumber: 9,
-            title: 'Catat Event Marker',
-            desc: '${s.events.length} event tercatat',
+            stepNumber: 5,
+            title: 'Tandai Momen / Event',
+            desc: '${s.events.length} catatan momen tersimpan',
             icon: Icons.bookmark_add_outlined,
             color: const Color(0xFFD97706),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EventMarkerScreen())),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const EventMarkerScreen())),
           ),
           _FlowStepCard(
-            stepNumber: 10,
-            title: 'Input Catatan Bebas (Catatan Saya)',
+            stepNumber: 6,
+            title: 'Catatan Pribadi',
             desc: s.note.isEmpty ? 'Belum ada catatan' : s.note,
             icon: Icons.edit_note_outlined,
             color: const Color(0xFF64748B),
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FreeNoteScreen())),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const FreeNoteScreen())),
           ),
           _FlowStepCard(
-            stepNumber: 11,
-            title: 'Ringkasan Input Harian',
-            desc: 'Konfirmasi sebelum data dikirim ke pipeline analitik',
+            stepNumber: 7,
+            title: 'Ringkasan Harian',
+            desc: 'Tinjau dan simpan seluruh data hari ini',
             icon: Icons.assignment_turned_in_outlined,
             color: AppTheme.primary,
-            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DailySummaryScreen())),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const DailySummaryScreen())),
+          ),
+          _FlowStepCard(
+            stepNumber: 8,
+            title: 'Eksperimen (Tahap 1–6)',
+            desc: 'Simulasi alur pemantauan, respons pengguna, dan interpretasi',
+            icon: Icons.science_outlined,
+            color: const Color(0xFF007A64),
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ExperimentFlowScreen())),
+          ),
+          _FlowStepCard(
+            stepNumber: 9,
+            title: 'Kuesioner SUS (System Usability Scale)',
+            desc: 'Penilaian 10 butir kebergunaan dan kemudahan aplikasi',
+            icon: Icons.checklist_rounded,
+            color: const Color(0xFF2563EB),
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const SusQuestionnaireScreen())),
+          ),
+          _FlowStepCard(
+            stepNumber: 10,
+            title: 'Kuesioner NASA-TLX (Beban Kerja)',
+            desc: 'Penilaian 6 dimensi beban mental, fisik, dan performa',
+            icon: Icons.speed_rounded,
+            color: const Color(0xFF1D4ED8),
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const NasaTlxQuestionnaireScreen())),
           ),
         ],
       ),
@@ -969,11 +2121,14 @@ class _FlowStepCard extends StatelessWidget {
                 Container(
                   width: 32,
                   height: 32,
-                  decoration: BoxDecoration(color: color.withValues(alpha: 0.12), shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      shape: BoxShape.circle),
                   child: Center(
                     child: Text(
                       '$stepNumber',
-                      style: AppTheme.font(size: 13, weight: FontWeight.w800, color: color),
+                      style: AppTheme.font(
+                          size: 13, weight: FontWeight.w800, color: color),
                     ),
                   ),
                 ),
@@ -982,16 +2137,20 @@ class _FlowStepCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title, style: AppTheme.font(size: 13.5, weight: FontWeight.w700)),
+                      Text(title,
+                          style: AppTheme.font(
+                              size: 13.5, weight: FontWeight.w700)),
                       const SizedBox(height: 2),
                       Text(desc,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: AppTheme.font(size: 11.5, color: AppTheme.textSecondary)),
+                          style: AppTheme.font(
+                              size: 11.5, color: AppTheme.textSecondary)),
                     ],
                   ),
                 ),
-                const Icon(Icons.chevron_right, size: 18, color: AppTheme.textMuted),
+                const Icon(Icons.chevron_right,
+                    size: 18, color: AppTheme.textMuted),
               ],
             ),
           ),

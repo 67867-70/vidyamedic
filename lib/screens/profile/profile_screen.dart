@@ -2,24 +2,38 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/health_models.dart';
 import '../../providers/app_state.dart';
+import '../../services/api_config.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/custom_widgets.dart';
+import '../welcome_screen.dart';
+import 'wearable_pairing_screen.dart';
 
 /// Halaman Profil & Tata Kelola Kesehatan VidyaMedic
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
+  Future<void> _persistProfileChange(BuildContext context) async {
+    final s = context.read<AppState>();
+    if (await s.saveProfileToServer()) return;
+    await s.fetchProfile();
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.dataError ?? 'Perubahan profil gagal disimpan ke server.')),
+      );
+    }
+  }
+
   void _openEditProfile(BuildContext context, UserProfile u) {
     final nameCtrl = TextEditingController(text: u.name);
-    final heightCtrl = TextEditingController(text: u.heightCm.toInt().toString());
-    final weightCtrl = TextEditingController(text: u.weightKg.toInt().toString());
+    final heightCtrl = TextEditingController(text: u.heightCm?.toInt().toString() ?? '');
+    final weightCtrl = TextEditingController(text: u.weightKg?.toInt().toString() ?? '');
     final emergencyNameCtrl = TextEditingController(text: u.emergencyContactName);
     final emergencyPhoneCtrl = TextEditingController(text: u.emergencyContactPhone);
     final allergiesCtrl = TextEditingController(text: u.allergies);
-    Gender gender = u.gender;
-    DateTime birth = u.birthDate;
+    Gender? gender = u.gender;
+    DateTime? birth = u.birthDate;
     String timeZone = u.timeZone;
-    String bloodType = u.bloodType;
+    String? bloodType = u.bloodType.isEmpty ? null : u.bloodType;
 
     showModalBottomSheet(
       context: context,
@@ -223,7 +237,7 @@ class ProfileScreen extends StatelessWidget {
                             items: const ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
                                 .map((b) => DropdownMenuItem(value: b, child: Text(b)))
                                 .toList(),
-                            onChanged: (v) => setMState(() => bloodType = v ?? bloodType),
+                            onChanged: (v) => setMState(() => bloodType = v),
                           ),
                         ],
                       ),
@@ -240,7 +254,7 @@ class ProfileScreen extends StatelessWidget {
                             decoration: const InputDecoration(
                               prefixIcon: Icon(Icons.schedule_rounded, size: 20, color: AppTheme.primary),
                             ),
-                            items: const ['WIB (UTC+7)', 'WITA (UTC+8)', 'WIT (UTC+9)']
+                            items: const ['Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura']
                                 .map((z) => DropdownMenuItem(value: z, child: Text(z)))
                                 .toList(),
                             onChanged: (v) => setMState(() => timeZone = v ?? timeZone),
@@ -296,7 +310,7 @@ class ProfileScreen extends StatelessWidget {
                       shadowColor: Colors.transparent,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
-                    onPressed: () {
+                    onPressed: () async {
                       final s = context.read<AppState>();
                       s.update(() {
                         s.userProfile = UserProfile(
@@ -306,16 +320,20 @@ class ProfileScreen extends StatelessWidget {
                           heightCm: double.tryParse(heightCtrl.text) ?? u.heightCm,
                           weightKg: double.tryParse(weightCtrl.text) ?? u.weightKg,
                           timeZone: timeZone,
-                          bloodType: bloodType,
-                          emergencyContactName: emergencyNameCtrl.text.trim().isEmpty
-                              ? u.emergencyContactName
-                              : emergencyNameCtrl.text.trim(),
-                          emergencyContactPhone: emergencyPhoneCtrl.text.trim().isEmpty
-                              ? u.emergencyContactPhone
-                              : emergencyPhoneCtrl.text.trim(),
-                          allergies: allergiesCtrl.text.trim().isEmpty ? u.allergies : allergiesCtrl.text.trim(),
+                          bloodType: bloodType ?? '',
+                          emergencyContactName: emergencyNameCtrl.text.trim(),
+                          emergencyContactPhone: emergencyPhoneCtrl.text.trim(),
+                          allergies: allergiesCtrl.text.trim(),
                         );
                       });
+                      final saved = await s.saveProfileToServer();
+                      if (!ctx.mounted) return;
+                      if (!saved) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          SnackBar(content: Text(s.dataError ?? 'Profil gagal disimpan ke server.')),
+                        );
+                        return;
+                      }
                       Navigator.pop(ctx);
                       showSaved(context, 'Profil pasien berhasil diperbarui');
                     },
@@ -334,6 +352,168 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  void _showLinkCaparDialog(BuildContext context) {
+    final passCtrl = TextEditingController();
+    bool isSubmitting = false;
+    String? errorMsg;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(color: AppTheme.primarySoft, shape: BoxShape.circle),
+                child: const Icon(Icons.link_rounded, color: AppTheme.primary, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('Tautkan Akun CAPAR', style: AppTheme.font(size: 16, weight: FontWeight.w700)),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Hubungkan akun dengan rekam medis CAPAR lama Anda menggunakan kata sandi pasien.',
+                style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary, height: 1.35),
+              ),
+              const SizedBox(height: 14),
+              if (errorMsg != null) ...[
+                Text(errorMsg!, style: AppTheme.font(size: 12, color: AppTheme.statusRed, weight: FontWeight.w600)),
+                const SizedBox(height: 8),
+              ],
+              TextField(
+                controller: passCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  hintText: 'Kata sandi akun pasien lama',
+                  prefixIcon: Icon(Icons.lock_outline_rounded, size: 20),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final p = passCtrl.text;
+                      if (p.isEmpty) {
+                        setDState(() => errorMsg = 'Kata sandi tidak boleh kosong.');
+                        return;
+                      }
+                      setDState(() {
+                        isSubmitting = true;
+                        errorMsg = null;
+                      });
+                      final s = context.read<AppState>();
+                      final ok = await s.linkLegacyCaparAccount(p);
+                      if (!ctx.mounted) return;
+                      if (ok) {
+                        Navigator.pop(ctx);
+                        showSaved(context, 'Akun CAPAR berhasil ditautkan!');
+                      } else {
+                        setDState(() {
+                          isSubmitting = false;
+                          errorMsg = 'Gagal menautkan akun. Pastikan kata sandi benar.';
+                        });
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Tautkan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showServerConfigDialog(BuildContext context) {
+    final ctrl = TextEditingController(text: ApiConfig.baseUrl);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Pengaturan Alamat Server', style: AppTheme.font(size: 16, weight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('URL backend server API yang digunakan aplikasi:',
+                style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: ctrl,
+              decoration: const InputDecoration(
+                hintText: 'http://10.0.2.2:3030 atau http://localhost:3030',
+                prefixIcon: Icon(Icons.dns_outlined, size: 20),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await ApiConfig.resetBaseUrl();
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Reset'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newUrl = ctrl.text.trim();
+              if (newUrl.isNotEmpty) {
+                await ApiConfig.setBaseUrl(newUrl);
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _logoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Keluar dari Akun?', style: AppTheme.font(size: 16, weight: FontWeight.w700)),
+        content: Text('Anda dapat masuk kembali kapan saja untuk melanjutkan pemantauan.',
+            style: AppTheme.font(size: 13, color: AppTheme.textSecondary)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.statusRed),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await context.read<AppState>().logout();
+              if (context.mounted) {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+                  (_) => false,
+                );
+              }
+            },
+            child: const Text('Keluar', style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
     );
   }
@@ -486,7 +666,7 @@ class ProfileScreen extends StatelessWidget {
     final existing = editIndex != null ? s.routineMedications[editIndex] : null;
     final name = TextEditingController(text: existing?.name);
     final dose = TextEditingController(text: existing?.dosage);
-    final freq = TextEditingController(text: existing?.frequency ?? '1x sehari (pagi)');
+    final freq = TextEditingController(text: existing?.frequency ?? '');
 
     showModalBottomSheet(
       context: context,
@@ -569,7 +749,7 @@ class ProfileScreen extends StatelessWidget {
                   shadowColor: Colors.transparent,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
-                onPressed: () {
+                onPressed: () async {
                   if (name.text.trim().isEmpty) return;
                   final m = Medication(name: name.text.trim(), dosage: dose.text.trim(), frequency: freq.text.trim());
                   if (editIndex != null) {
@@ -577,8 +757,18 @@ class ProfileScreen extends StatelessWidget {
                   } else {
                     s.addMedication(m);
                   }
+                  if (!await s.saveProfileToServer()) {
+                    await s.fetchProfile();
+                    if (ctx.mounted) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        SnackBar(content: Text(s.dataError ?? 'Obat gagal disimpan ke server.')),
+                      );
+                    }
+                    return;
+                  }
+                  if (!ctx.mounted) return;
                   Navigator.pop(ctx);
-                  showSaved(context, 'Daftar obat berhasil disimpan');
+                  showSaved(context, 'Daftar obat tersimpan di server');
                 },
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -643,7 +833,9 @@ class ProfileScreen extends StatelessWidget {
               subtitle: 'Berisi grafik deviasi z-score, HRV, tidur, dan status CAPAR',
               onTap: () {
                 Navigator.pop(ctx);
-                showSaved(context, 'Laporan PDF VidyaMedic (7 Hari) berhasil diunduh ke memori perangkat.');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Ekspor PDF belum tersedia dari backend.')),
+                );
               },
             ),
             const SizedBox(height: 10),
@@ -653,7 +845,9 @@ class ProfileScreen extends StatelessWidget {
               subtitle: 'Format ringkasan klinis terstandar HL7 FHIR ready',
               onTap: () {
                 Navigator.pop(ctx);
-                showSaved(context, 'Membuka tautan WhatsApp rujukan dokter...');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Berbagi laporan belum tersedia dari backend.')),
+                );
               },
             ),
             const SizedBox(height: 10),
@@ -722,21 +916,22 @@ class ProfileScreen extends StatelessWidget {
     final u = s.userProfile;
     final w = s.wearable;
 
-    // BMI Calculation & classification
-    final heightM = u.heightCm / 100.0;
-    final bmiVal = (u.weightKg / (heightM * heightM));
-    final bmi = bmiVal.toStringAsFixed(1);
-    String bmiCategory = 'Normal';
+    final hasBmi = u.heightCm != null && u.heightCm! > 0 && u.weightKg != null;
+    final bmiVal = hasBmi ? u.weightKg! / ((u.heightCm! / 100) * (u.heightCm! / 100)) : null;
+    final bmi = bmiVal?.toStringAsFixed(1) ?? 'Belum ada';
+    String bmiCategory = 'Belum ada';
     Color bmiColor = AppTheme.statusGreen;
-    if (bmiVal < 18.5) {
+    if (bmiVal != null && bmiVal < 18.5) {
       bmiCategory = 'Kurang';
       bmiColor = AppTheme.statusOrange;
-    } else if (bmiVal >= 25.0 && bmiVal < 30.0) {
+    } else if (bmiVal != null && bmiVal >= 25.0 && bmiVal < 30.0) {
       bmiCategory = 'Berlebih';
       bmiColor = AppTheme.statusYellow;
-    } else if (bmiVal >= 30.0) {
+    } else if (bmiVal != null && bmiVal >= 30.0) {
       bmiCategory = 'Obesitas';
       bmiColor = AppTheme.statusRed;
+    } else if (bmiVal != null) {
+      bmiCategory = 'Normal';
     }
 
     return Scaffold(
@@ -839,7 +1034,7 @@ class ProfileScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 3),
                           Text(
-                            '${u.age} tahun • ${u.gender == Gender.female ? "Perempuan" : "Laki-laki"} • ID: VDM-88294',
+                            '${u.age == null ? "Usia belum tersedia" : "${u.age} tahun"} • ${u.gender?.label ?? "Jenis kelamin belum tersedia"}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: AppTheme.font(size: 11.5, color: AppTheme.textSecondary),
@@ -883,11 +1078,11 @@ class ProfileScreen extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: _statPill('Tinggi', '${u.heightCm.toInt()} cm', Icons.height_rounded),
+                      child: _statPill('Tinggi', u.heightCm == null ? 'Belum ada' : '${u.heightCm!.toInt()} cm', Icons.height_rounded),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: _statPill('Berat', '${u.weightKg.toInt()} kg', Icons.monitor_weight_outlined),
+                      child: _statPill('Berat', u.weightKg == null ? 'Belum ada' : '${u.weightKg!.toInt()} kg', Icons.monitor_weight_outlined),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -1025,7 +1220,7 @@ class ProfileScreen extends StatelessWidget {
                             children: [
                               Expanded(
                                 child: Text(
-                                  w.deviceName,
+                                  w.deviceName.isEmpty ? 'Wearable belum tersedia' : w.deviceName,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: AppTheme.font(size: 15, weight: FontWeight.w800, color: Colors.white),
@@ -1051,16 +1246,21 @@ class ProfileScreen extends StatelessWidget {
                                       ),
                                     ),
                                     const SizedBox(width: 4),
-                                    Text('Terhubung BLE',
+                                    Text(w.hasServerSamples ? 'Sampel server' : 'Belum tersedia',
                                         style: AppTheme.font(
-                                            size: 9.5, weight: FontWeight.w700, color: AppTheme.accentMint)),
+                                            size: 9.5,
+                                            weight: FontWeight.w700,
+                                            color: w.hasServerSamples ? AppTheme.accentMint : Colors.white70)),
                                   ],
                                 ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 3),
-                          Text('Baterai ${w.batteryPercent}% • Terakhir sinkron 2 mnt lalu',
+                          Text(
+                              w.lastSync == null
+                                  ? 'Data perangkat belum tersedia dari server'
+                                  : 'Sampel terakhir: ${w.lastSync!.toLocal()}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: AppTheme.font(size: 11, color: Colors.white70)),
@@ -1084,16 +1284,27 @@ class ProfileScreen extends StatelessWidget {
                           const Icon(Icons.sensors_rounded, color: AppTheme.accentMint, size: 16),
                           const SizedBox(width: 6),
                           Text(
-                            'Aliran Fisiologi Realtime Aktif',
+                            s.wearable.hasServerSamples ? 'Sampel wearable tersedia' : 'Belum ada sampel wearable',
                             style: AppTheme.font(size: 11.5, weight: FontWeight.w600, color: Colors.white),
                           ),
                         ],
                       ),
                       // Tactile White Sync Pill Button
                       InkWell(
-                        onTap: () {
-                          s.syncWearable();
-                          showSaved(context, 'Data sensor wearable berhasil disinkronkan');
+                        onTap: () async {
+                          final synced = await s.syncWearable();
+                          if (!context.mounted) return;
+                          if (!synced) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(s.dataError ?? 'Sinkronisasi gagal.')),
+                            );
+                          } else if (s.wearableSamples.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(s.dataError ?? 'Belum ada sampel wearable di server.')),
+                            );
+                          } else {
+                            showSaved(context, 'Sampel wearable dimuat dari server');
+                          }
                         },
                         borderRadius: BorderRadius.circular(20),
                         child: Container(
@@ -1126,6 +1337,16 @@ class ProfileScreen extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const WearablePairingScreen()),
+            ),
+            icon: const Icon(Icons.bluetooth_searching),
+            label: const Text('Pairing Polar H10 & streaming'),
           ),
 
           const SectionTitle('Riwayat Medis & Pengobatan', padding: EdgeInsets.only(top: 22, bottom: 10)),
@@ -1303,10 +1524,10 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
 
-          const SectionTitle('Alur Nilai Socio-Technical & Tata Kelola AI',
+          const SectionTitle('Alur Pemantauan & Keamanan Data Anda',
               padding: EdgeInsets.only(top: 22, bottom: 10)),
 
-          // 5. Socio-Technical Value Chain
+          // 5. Friendly Monitoring Flow
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -1319,30 +1540,81 @@ class ProfileScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _chainStep(
-                  '1. Data Sensing',
-                  'Fisiologi wearable kontinu (HR, RMSSD, SpO₂) + input konteks subjektif',
+                  '1. Pengukuran Sensor Otomatis',
+                  'Mencatat detak jantung, pemulihan (HRV), dan oksigen secara berkelanjutan.',
                   icon: Icons.sensors_rounded,
                 ),
                 _chainStep(
-                  '2. Informasi Fisiologi',
-                  'Baseline adaptif personal + deteksi deviasi multivariat (Z-score & Mahalanobis)',
+                  '2. Pemahaman Pola Tubuh Anda',
+                  'Mengenali rentang normal harian khusus untuk tubuh Anda sendiri.',
                   icon: Icons.show_chart_rounded,
                 ),
                 _chainStep(
-                  '3. Pemahaman Pedagogis',
-                  '6 pertanyaan pedagogis CAPAR kontekstual (Where, What, Why, Dwell, Recovery, Action)',
+                  '3. 6 Panduan Memahami Kondisi Fisik',
+                  'Memberi tahu kondisi terkini, perubahan ritme, dan faktor penyebab yang dirasakan.',
                   icon: Icons.psychology_outlined,
                 ),
                 _chainStep(
-                  '4. Keputusan & Tindakan',
-                  'Self-care bertahap & protokol eskalasi klinis tepat waktu (Hijau/Kuning/Oranye/Merah)',
+                  '4. Rekomendasi Langkah Sehat Mandiri',
+                  'Panduan aktivitas harian yang aman dan anjuran waktu yang tepat berkonsultasi ke dokter.',
                   icon: Icons.directions_run_rounded,
                 ),
                 _chainStep(
-                  '5. Tata Kelola & Safety',
-                  'Quality gating, Red flag override, enkripsi privasi & batasan non-diagnostic',
+                  '5. Keamanan Privasi & Pengawasan',
+                  'Data Anda dienkripsi aman dan tidak disebarluaskan tanpa persetujuan Anda.',
                   icon: Icons.verified_user_outlined,
                   isLast: true,
+                ),
+              ],
+            ),
+          ),
+
+          const SectionTitle('Integrasi & Pengaturan Akun',
+              padding: EdgeInsets.only(top: 22, bottom: 10)),
+
+          // Integration Actions
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppTheme.borderLight),
+              boxShadow: AppTheme.shadowSoft,
+            ),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(color: AppTheme.primarySoft, shape: BoxShape.circle),
+                    child: const Icon(Icons.link_rounded, color: AppTheme.primary, size: 20),
+                  ),
+                  title: Text('Tautkan Akun CAPAR Pasien', style: AppTheme.font(size: 13.5, weight: FontWeight.w700)),
+                  subtitle: Text('Hubungkan data riwayat dari rekam medis CAPAR lama', style: AppTheme.font(size: 11.5, color: AppTheme.textSecondary)),
+                  trailing: const Icon(Icons.chevron_right, size: 20, color: AppTheme.textMuted),
+                  onTap: () => _showLinkCaparDialog(context),
+                ),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: const Color(0xFF0284C7).withValues(alpha: 0.12), shape: BoxShape.circle),
+                    child: const Icon(Icons.dns_outlined, color: Color(0xFF0284C7), size: 20),
+                  ),
+                  title: Text('Pengaturan Alamat Server API', style: AppTheme.font(size: 13.5, weight: FontWeight.w700)),
+                  subtitle: Text(ApiConfig.baseUrl, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppTheme.font(size: 11.5, color: AppTheme.textSecondary)),
+                  trailing: const Icon(Icons.chevron_right, size: 20, color: AppTheme.textMuted),
+                  onTap: () => _showServerConfigDialog(context),
+                ),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(color: Color(0xFFFEE2E2), shape: BoxShape.circle),
+                    child: const Icon(Icons.logout_rounded, color: AppTheme.statusRed, size: 20),
+                  ),
+                  title: Text('Keluar dari Akun', style: AppTheme.font(size: 13.5, weight: FontWeight.w700, color: AppTheme.statusRed)),
+                  subtitle: Text('Keluar dari sesi pemantauan saat ini', style: AppTheme.font(size: 11.5, color: AppTheme.textSecondary)),
+                  onTap: () => _logoutDialog(context),
                 ),
               ],
             ),
@@ -1351,7 +1623,7 @@ class ProfileScreen extends StatelessWidget {
           const SectionTitle('Pengaturan Notifikasi & Pemantauan',
               padding: EdgeInsets.only(top: 22, bottom: 10)),
 
-          // 6. Notification & Privacy Settings (Custom Switch Rows, No ListTile Ink Error)
+          // 6. Notification & Privacy Settings
           Container(
             decoration: BoxDecoration(
               color: Colors.white,
@@ -1362,24 +1634,33 @@ class ProfileScreen extends StatelessWidget {
             child: Column(
               children: [
                 _settingSwitchRow(
-                  title: 'Pengingat Ringkasan Harian',
-                  subtitle: 'Pengingat mengisi log pagi hari (07:00 WIB)',
+                  title: 'Pengingat Ringkasan Pagi',
+                  subtitle: 'Mengingatkan mengisi catatan kondisi tubuh di pagi hari',
                   value: s.notifDailySummary,
-                  onChanged: (v) => s.update(() => s.notifDailySummary = v),
+                  onChanged: (v) {
+                    s.update(() => s.notifDailySummary = v);
+                    _persistProfileChange(context);
+                  },
                 ),
                 const Divider(height: 1, indent: 16, endIndent: 16),
                 _settingSwitchRow(
-                  title: 'Peringatan Red Flag & Anomali',
-                  subtitle: 'Notifikasi instan jika detak jantung atau gejala melampaui batas aman',
+                  title: 'Peringatan Gejala & Keamanan',
+                  subtitle: 'Pemberitahuan penting jika ada perubahan kondisi tubuh yang membutuhkan perhatian',
                   value: s.notifCriticalAlerts,
-                  onChanged: (v) => s.update(() => s.notifCriticalAlerts = v),
+                  onChanged: (v) {
+                    s.update(() => s.notifCriticalAlerts = v);
+                    _persistProfileChange(context);
+                  },
                 ),
                 const Divider(height: 1, indent: 16, endIndent: 16),
                 _settingSwitchRow(
-                  title: 'Berbagi Data dengan Caregiver / Faskes',
-                  subtitle: 'Izinkan dokter memantau grafik pemulihan',
+                  title: 'Berbagi Data dengan Tenaga Medis / Keluarga',
+                  subtitle: 'Memberi akses ringkasan grafik kesehatan kepada dokter Anda',
                   value: s.allowDataSharing,
-                  onChanged: (v) => s.update(() => s.allowDataSharing = v),
+                  onChanged: (v) {
+                    s.update(() => s.allowDataSharing = v);
+                    _persistProfileChange(context);
+                  },
                 ),
               ],
             ),
@@ -1387,7 +1668,7 @@ class ProfileScreen extends StatelessWidget {
 
           const SizedBox(height: 16),
 
-          // 7. Export & Share Tile (Button)
+          // 7. Export & Share Tile
           InkWell(
             onTap: () => _showExportSheet(context),
             borderRadius: BorderRadius.circular(18),
@@ -1413,7 +1694,7 @@ class ProfileScreen extends StatelessWidget {
                       children: [
                         Text('Ekspor Laporan Kesehatan PDF',
                             style: AppTheme.font(size: 13.5, weight: FontWeight.w700)),
-                        Text('Ringkasan klinis terstandar untuk dokter spesialis',
+                        Text('Ringkasan berkala yang mudah dibawa saat berkonsultasi ke dokter',
                             style: AppTheme.font(size: 11, color: AppTheme.textSecondary)),
                       ],
                     ),
@@ -1441,7 +1722,7 @@ class ProfileScreen extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'VidyaMedic adalah sistem edukasi & pemantauan personal berbasis wearable. Bukan pengganti diagnosis medis dokter atau layanan kedaruratan IGD 119/112.',
+                    'VidyaMedic adalah aplikasi edukasi & pemantauan kesehatan mandiri. Jika Anda mengalami kondisi darurat atau gejala berat, segera hubungi layanan gawat darurat atau faskes terdekat.',
                     style: AppTheme.font(size: 11, color: const Color(0xFF9A3412), height: 1.4),
                   ),
                 ),
@@ -1454,7 +1735,7 @@ class ProfileScreen extends StatelessWidget {
           // 9. App Version
           Center(
             child: Text(
-              'VidyaMedic Personal Health v2.4.0 • Build 2026.10',
+              'VidyaMedic • Versi 2.4.0',
               style: AppTheme.font(size: 11, color: AppTheme.textMuted),
             ),
           ),

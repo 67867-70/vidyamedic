@@ -5,284 +5,151 @@ import '../../theme/app_theme.dart';
 import '../../widgets/custom_widgets.dart';
 import 'pedagogy_screen_what_changed.dart';
 
-/// Mockup Lanjutan Halaman 5: Layar 2 - Kondisi Saat Ini ("Where Am I?")
 class WhereAmIScreen extends StatelessWidget {
   const WhereAmIScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final s = context.watch<AppState>();
-    final u = s.userProfile;
-    final w = s.wearable;
+    final state = context.watch<AppState>();
+    final profile = state.userProfile;
+    final deviation = state.latestCaparMahalanobis;
+    final checkIns = state.dailySummaryData?['check_ins'];
+    final latestCheckIn = checkIns is List && checkIns.isNotEmpty && checkIns.last is Map
+        ? Map<String, dynamic>.from(checkIns.last as Map)
+        : <String, dynamic>{};
+    final sleep = latestCheckIn['sleep'] is Map
+        ? Map<String, dynamic>.from(latestCheckIn['sleep'] as Map)
+        : <String, dynamic>{};
+    final where = _whereAmI(state);
+    final bool isAvailable = deviation != null && deviation['available'] == true;
+    final displayName = profile.name.isEmpty ? 'Pasien' : profile.name;
+    final caparState = isAvailable ? deviation['state']?.toString() ?? 'State CAPAR tersedia' : 'Belum cukup data untuk status personal';
 
     return MockupScaffold(
       title: 'Kondisi Saat Ini',
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Greeting & avatar
-          Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: AppTheme.primarySoft,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: AppTheme.primaryLight.withValues(alpha: 0.3)),
-                ),
-                child: Center(
-                  child: Text(
-                    u.name.isNotEmpty ? u.name.substring(0, 1) : 'B',
-                    style: AppTheme.font(size: 18, weight: FontWeight.w800, color: AppTheme.primaryDark),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Halo, ${u.name}!', style: AppTheme.font(size: 16, weight: FontWeight.w800)),
-                    Text('Senang melihat kamu kembali. Yuk pantau kondisi kesehatanmu hari ini.',
-                        style: AppTheme.font(size: 11.5, color: AppTheme.textSecondary, height: 1.25)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Status Banner (Perlu Observasi / Dalam Batas / Deviasi)
+          Text('Halo, $displayName', style: AppTheme.font(size: 17, weight: FontWeight.w800)),
+          const SizedBox(height: 12),
           Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFFFEF3C7),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.5), width: 1.2),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: const BoxDecoration(color: Color(0xFFF59E0B), shape: BoxShape.circle),
-                  child: const Icon(Icons.priority_high_rounded, color: Colors.white, size: 16),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Perlu Observasi',
-                          style: AppTheme.font(size: 14, weight: FontWeight.w800, color: const Color(0xFF92400E))),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Ada beberapa perubahan dari kondisi biasanya. Tetap tenang dan terus pantau.',
-                        style: AppTheme.font(size: 12, color: const Color(0xFF78350F), height: 1.3),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // 2x2 Grid: HR, Durasi Tidur, Aktivitas, HRV
-          Row(
-            children: [
-              Expanded(
-                child: _MetricCard(
-                  icon: Icons.favorite,
-                  iconColor: AppTheme.faceRed,
-                  title: 'Detak Jantung',
-                  value: '${w.heartRate} bpm',
-                  delta: '(+18 dari biasanya)',
-                  deltaIsAlert: true,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _MetricCard(
-                  icon: Icons.bedtime,
-                  iconColor: const Color(0xFF6366F1),
-                  title: 'Durasi Tidur',
-                  value: '5,2 jam',
-                  delta: '(-2,1 jam)',
-                  deltaIsAlert: true,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _MetricCard(
-                  icon: Icons.directions_walk,
-                  iconColor: const Color(0xFF0EA5E9),
-                  title: 'Aktivitas Harian',
-                  value: '1.200 langkah',
-                  delta: 'Rendah (dari 6.000)',
-                  deltaIsAlert: true,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _MetricCard(
-                  icon: Icons.monitor_heart_outlined,
-                  iconColor: const Color(0xFF10B981),
-                  title: 'HRV (RMSSD)',
-                  value: '${w.hrvRmssd} ms',
-                  delta: '(-35% dari 43 ms)',
-                  deltaIsAlert: true,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Natural Language Summary
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.white,
+              color: isAvailable ? AppTheme.primarySoft : AppTheme.statusYellowBg,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: AppTheme.borderLight),
-              boxShadow: AppTheme.shadowSoft,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.chat_bubble_outline, size: 18, color: AppTheme.primary),
-                    const SizedBox(width: 8),
-                    Text('Ringkasan Hari Ini',
-                        style: AppTheme.font(size: 13.5, weight: FontWeight.w700, color: AppTheme.primaryDark)),
-                  ],
-                ),
-                const SizedBox(height: 8),
                 Text(
-                  'Detak jantungmu lebih tinggi dari biasanya, tidur lebih singkat, dan aktivitas lebih rendah. Kondisimu saat ini perlu observasi. Tetap pantau dan perhatikan bagaimana perasaanmu.',
-                  style: AppTheme.font(size: 12.5, color: AppTheme.textPrimary, height: 1.4),
+                  caparState,
+                  style: AppTheme.font(size: 14, weight: FontWeight.w800, color: AppTheme.primaryDark),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  where?['meaning']?.toString() ??
+                      'Status akan tampil setelah data yang lolos quality gate tersedia di CAPAR.',
+                  style: AppTheme.font(size: 12.5, color: AppTheme.textSecondary, height: 1.35),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
-
-          // Action button to step 2: "Apa yang Berubah?"
-          InkWell(
-            onTap: () => Navigator.push(
+          const SizedBox(height: 14),
+          _metricGrid([
+            ('Detak jantung', state.wearable.heartRate > 0 ? '${state.wearable.heartRate} bpm' : 'Belum ada'),
+            ('Jarak Mahalanobis', deviation?['distance']?.toString() ?? 'Belum ada'),
+            (
+              state.wearable.stepsEstimatedFromAcc
+                  ? 'Perkiraan langkah dari ACC'
+                  : 'Langkah',
+              state.wearable.steps > 0
+                  ? '${state.wearable.steps}'
+                  : 'Belum ada',
+            ),
+            (
+              'Tidur terakhir',
+              sleep['duration_minutes'] is num
+                  ? '${((sleep['duration_minutes'] as num) / 60).toStringAsFixed(1)} jam'
+                  : 'Belum dicatat',
+            ),
+          ]),
+          const SizedBox(height: 14),
+          _metricGrid([
+            ('HRV RMSSD', state.wearable.hrvRmssd > 0 ? '${state.wearable.hrvRmssd} ms' : 'Belum ada'),
+            ('SpO₂', state.wearable.spO2 > 0 ? '${state.wearable.spO2}%' : 'Belum ada'),
+            ('Baseline matang', _matureBaselineCount(state)),
+            ('Kualitas data', deviation?['quality']?.toString() ?? 'Belum tersedia'),
+          ]),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: AppTheme.borderLight),
+            ),
+            child: Text(
+              isAvailable
+                  ? 'Pembanding Mahalanobis: baseline aktivitas ${deviation['activity'] ?? 'tidak diketahui'} • periode ${deviation['time_period'] ?? 'tidak diketahui'} • kematangan ${deviation['baseline_level'] ?? 'belum tersedia'}.'
+                  : 'Jarak Mahalanobis menunggu baseline yang sesuai dengan aktivitas dan periode waktu.',
+              style: AppTheme.font(
+                  size: 11.5,
+                  color: AppTheme.textSecondary,
+                  height: 1.35),
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (state.dataError != null)
+            Text(state.dataError!, style: AppTheme.font(size: 11.5, color: AppTheme.statusRed)),
+          OutlinedButton(
+            onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const WhatChangedScreen()),
             ),
-            borderRadius: BorderRadius.circular(14),
+            child: const Text('Lihat apa yang berubah'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Map<String, dynamic>? _whereAmI(AppState state) {
+    final capar = state.rawCaparInsights?['capar'];
+    final pedagogy = capar is Map ? capar['pedagogy'] : null;
+    final where = pedagogy is Map ? pedagogy['where_am_i'] : null;
+    return where is Map ? Map<String, dynamic>.from(where) : null;
+  }
+
+  String _matureBaselineCount(AppState state) {
+    final baseline = (state.rawCaparInsights?['capar'] as Map?)?['baseline'];
+    return baseline is Map ? baseline['mature_contexts']?.toString() ?? 'Belum ada' : 'Belum ada';
+  }
+
+  Widget _metricGrid(List<(String, String)> entries) => Row(
+        children: entries.map((entry) {
+          final index = entries.indexOf(entry);
+          return Expanded(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              margin: EdgeInsets.only(right: index == entries.length - 1 ? 0 : 8),
+              padding: const EdgeInsets.all(11),
               decoration: BoxDecoration(
-                color: AppTheme.primarySoft,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppTheme.primaryLight.withValues(alpha: 0.3)),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(color: AppTheme.borderLight),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.trending_up, color: AppTheme.primary, size: 20),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Langkah Selanjutnya: Apa yang Berubah?',
-                            style: AppTheme.font(size: 13, weight: FontWeight.w700, color: AppTheme.primaryDark)),
-                        Text('Lihat grafik perbandingan fitur terhadap baseline personal',
-                            style: AppTheme.font(size: 11.5, color: AppTheme.textSecondary)),
-                      ],
-                    ),
-                  ),
-                  const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.primary),
+                  Text(entry.$1, style: AppTheme.font(size: 10.5, color: AppTheme.textMuted)),
+                  const SizedBox(height: 5),
+                  Text(entry.$2, style: AppTheme.font(size: 12, weight: FontWeight.w700)),
                 ],
               ),
             ),
-          ),
-        ],
-      ),
-      bottom: ElevatedButton(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const WhatChangedScreen()),
-        ),
-        child: const Text('Lihat Apa yang Berubah →'),
-      ),
-    );
-  }
-}
-
-class _MetricCard extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String value;
-  final String delta;
-  final bool deltaIsAlert;
-
-  const _MetricCard({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.value,
-    required this.delta,
-    this.deltaIsAlert = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderLight),
-        boxShadow: AppTheme.shadowSoft,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 16, color: iconColor),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  title,
-                  style: AppTheme.font(size: 11, color: AppTheme.textMuted, weight: FontWeight.w500),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppTheme.font(size: 14.5, weight: FontWeight.w800),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            delta,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppTheme.font(
-              size: 10,
-              weight: FontWeight.w600,
-              color: deltaIsAlert ? const Color(0xFFDC2626) : AppTheme.textMuted,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+          );
+        }).toList(),
+      );
 }

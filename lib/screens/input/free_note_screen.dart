@@ -28,15 +28,27 @@ class _FreeNoteScreenState extends State<FreeNoteScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     final s = context.read<AppState>();
-    s.update(() => s.note = _ctrl.text.trim());
-    showSaved(context, 'Catatan berhasil disimpan');
+    s.update(() {
+      s.note = _ctrl.text.trim();
+      s.confirmDailySection('note');
+    });
+    final saved = await s.submitDaily();
+    if (!mounted) return;
+    if (!saved) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.dataError ?? 'Catatan gagal disimpan ke server.')),
+      );
+      return;
+    }
+    showSaved(context, 'Catatan tersimpan di server');
     Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<AppState>();
     return MockupScaffold(
       title: 'Catatan Saya',
       body: Column(
@@ -90,8 +102,14 @@ class _FreeNoteScreenState extends State<FreeNoteScreen> {
         ],
       ),
       bottom: ElevatedButton(
-        onPressed: _save,
-        child: const Text('Simpan'),
+        onPressed: s.isSubmittingDaily ? null : _save,
+        child: s.isSubmittingDaily
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Simpan'),
       ),
     );
   }

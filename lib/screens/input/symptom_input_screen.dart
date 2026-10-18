@@ -27,14 +27,23 @@ class _SymptomInputScreenState extends State<SymptomInputScreen> {
     _level = s.symptomLevel;
   }
 
-  void _save() {
+  Future<void> _save() async {
     final s = context.read<AppState>();
     s.update(() {
       s.mood = _mood;
       s.symptoms = List.from(_symptoms);
       s.symptomLevel = _level;
+      s.confirmDailySection('symptoms');
     });
-    showSaved(context, 'Gejala & perasaan berhasil disimpan');
+    final saved = await s.submitDaily();
+    if (!mounted) return;
+    if (!saved) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.dataError ?? 'Catatan gejala gagal disimpan ke server.')),
+      );
+      return;
+    }
+    showSaved(context, 'Gejala dan perasaan tersimpan di server');
     Navigator.pop(context);
   }
 
@@ -141,8 +150,14 @@ class _SymptomInputScreenState extends State<SymptomInputScreen> {
         ],
       ),
       bottom: ElevatedButton(
-        onPressed: _save,
-        child: const Text('Simpan'),
+        onPressed: s.isSubmittingDaily ? null : _save,
+        child: s.isSubmittingDaily
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Simpan'),
       ),
     );
   }
